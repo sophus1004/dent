@@ -1,0 +1,150 @@
+{"id": "qa-001", "query": "태양계에서 제일 작은 행성은 크기가 어느 정도야?", "positive": "ca-01-1", "negatives": ["ca-01-2", "ca-01-3", "ca-01-4"], "false_negative": null}
+{"id": "qa-002", "query": "지구와 반대 방향으로 자전하는 행성", "positive": "ca-01-2", "negatives": ["ca-01-1", "ca-01-3", "ca-01-4"], "false_negative": null}
+{"id": "qa-003", "query": "화성 위성 포보스 데이모스 발견 연도", "positive": "ca-01-3", "negatives": ["ca-01-1", "ca-01-2", "ca-01-4"], "false_negative": null}
+{"id": "qa-004", "query": "목성 대적점은 무엇인가", "positive": "ca-01-4", "negatives": ["ca-01-1", "ca-01-2", "ca-01-3"], "false_negative": null}
+{"id": "qa-005", "query": "화성 표면이 붉은색을 띠는 까닭", "positive": "ca-01-3", "negatives": ["ca-01-2", "ca-01-4"], "false_negative": null}
+{"id": "qa-006", "query": "물보다 밀도가 낮은 행성", "positive": "ca-02-1", "negatives": ["ca-02-2", "ca-02-3", "ca-02-4"], "false_negative": null}
+{"id": "qa-007", "query": "타이탄 대기는 어떤 기체로 되어 있나", "positive": "ca-02-1", "negatives": ["ca-02-2", "ca-02-3"], "false_negative": null}
+{"id": "qa-008", "query": "망원경으로 처음 찾은 행성과 발견자", "positive": "ca-02-2", "negatives": ["ca-02-3", "ca-02-4"], "false_negative": null}
+{"id": "qa-009", "query": "해왕성은 어떤 과정을 거쳐 발견됐을까", "positive": "ca-02-3", "negatives": ["ca-02-1", "ca-02-2", "ca-02-4"], "false_negative": null}
+{"id": "qa-010", "query": "명왕성이 행성 지위를 잃은 해", "positive": "ca-02-4", "negatives": ["ca-02-1", "ca-02-2", "ca-02-3"], "false_negative": "ca-02-t"}
+{"id": "qa-011", "query": "태양 다음으로 밝게 보이는 별", "positive": "ca-03-1", "negatives": ["ca-03-2", "ca-03-3", "ca-03-4"], "false_negative": null}
+{"id": "qa-012", "query": "폴라리스 겉보기 등급과 거리", "positive": "ca-03-2", "negatives": ["ca-03-1", "ca-03-4"], "false_negative": null}
+{"id": "qa-013", "query": "2019년 말 베텔게우스가 어두워진 일", "positive": "ca-03-3", "negatives": ["ca-03-1", "ca-03-2", "ca-03-4"], "false_negative": null}
+{"id": "qa-014", "query": "태양 말고 처음으로 사진에 찍힌 별", "positive": "ca-03-4", "negatives": ["ca-03-1", "ca-03-2", "ca-03-3"], "false_negative": null}
+{"id": "qa-015", "query": "직녀성은 어느 별자리에 속하나", "positive": "ca-03-4", "negatives": ["ca-03-1", "ca-03-3"], "false_negative": null}
+{"id": "qa-016", "query": "허블 망원경 초기 사진이 흐렸던 원인", "positive": "ca-04-1", "negatives": ["ca-04-2", "ca-04-3", "ca-04-4"], "false_negative": null}
+{"id": "qa-017", "query": "제임스 웹 주거울 지름과 조각 수", "positive": "ca-04-2", "negatives": ["ca-04-1", "ca-04-3", "ca-04-4"], "false_negative": null}
+{"id": "qa-018", "query": "제임스 웹 망원경은 우주 어디에 떠 있나", "positive": "ca-04-2", "negatives": ["ca-04-1", "ca-04-4"], "false_negative": null}
+{"id": "qa-019", "query": "케플러 망원경의 외계 행성 탐색 방법", "positive": "ca-04-3", "negatives": ["ca-04-1", "ca-04-2", "ca-04-4"], "false_negative": null}
+{"id": "qa-020", "query": "찬드라 관측선 이름은 누구에게서 따왔나", "positive": "ca-04-4", "negatives": ["ca-04-1", "ca-04-2", "ca-04-3"], "false_negative": null}
+{"id": "qa-021", "query": "오존층이 자리한 대기층", "positive": "ca-05-2", "negatives": ["ca-05-1", "ca-05-3", "ca-05-4"], "false_negative": "ca-05-t"}
+{"id": "qa-022", "query": "비나 눈 같은 기상 현상이 생기는 대기층", "positive": "ca-05-1", "negatives": ["ca-05-2", "ca-05-3", "ca-05-4"], "false_negative": null}
+{"id": "qa-023", "query": "별똥별이 불타는 대기층", "positive": "ca-05-3", "negatives": ["ca-05-1", "ca-05-2", "ca-05-4"], "false_negative": null}
+{"id": "qa-024", "query": "오로라는 대기 어느 층에서 나타나나", "positive": "ca-05-4", "negatives": ["ca-05-1", "ca-05-2", "ca-05-3"], "false_negative": null}
+{"id": "qa-025", "query": "대류권 기온 감률 1km당 몇 도", "positive": "ca-05-1", "negatives": ["ca-05-2", "ca-05-3"], "false_negative": null}
+{"id": "qa-026", "query": "모호면은 누가 언제 발견했나", "positive": "ca-06-1", "negatives": ["ca-06-2", "ca-06-3", "ca-06-4"], "false_negative": null}
+{"id": "qa-027", "query": "해양 지각과 대륙 지각 두께 비교", "positive": "ca-06-1", "negatives": ["ca-06-2", "ca-06-3"], "false_negative": null}
+{"id": "qa-028", "query": "지구 부피에서 맨틀이 차지하는 비율", "positive": "ca-06-2", "negatives": ["ca-06-1", "ca-06-3", "ca-06-4"], "false_negative": null}
+{"id": "qa-029", "query": "지구 자기장은 어디에서 만들어질까", "positive": "ca-06-3", "negatives": ["ca-06-1", "ca-06-2", "ca-06-4"], "false_negative": null}
+{"id": "qa-030", "query": "내핵이 그렇게 뜨거운데도 고체인 이유", "positive": "ca-06-4", "negatives": ["ca-06-1", "ca-06-2", "ca-06-3"], "false_negative": null}
+{"id": "qa-031", "query": "결정이 굵어 맨눈으로 보이는 심성암", "positive": "ca-07-1", "negatives": ["ca-07-2", "ca-07-3", "ca-07-4"], "false_negative": null}
+{"id": "qa-032", "query": "육각형 주상절리가 생기는 암석", "positive": "ca-07-2", "negatives": ["ca-07-1", "ca-07-3", "ca-07-4"], "false_negative": null}
+{"id": "qa-033", "query": "석회 동굴은 어떻게 만들어지나요", "positive": "ca-07-3", "negatives": ["ca-07-1", "ca-07-2", "ca-07-4"], "false_negative": null}
+{"id": "qa-034", "query": "대리석이라는 이름의 유래", "positive": "ca-07-4", "negatives": ["ca-07-1", "ca-07-3"], "false_negative": null}
+{"id": "qa-035", "query": "시멘트 원료가 되는 퇴적암", "positive": "ca-07-3", "negatives": ["ca-07-1", "ca-07-2", "ca-07-4"], "false_negative": null}
+{"id": "qa-036", "query": "천연 물질 중 가장 단단한 광물", "positive": "ca-08-1", "negatives": ["ca-08-2", "ca-08-3", "ca-08-4"], "false_negative": null}
+{"id": "qa-037", "query": "수정 시계에 석영을 쓰는 이유", "positive": "ca-08-2", "negatives": ["ca-08-1", "ca-08-3", "ca-08-4"], "false_negative": null}
+{"id": "qa-038", "query": "루비가 빨간색을 띠는 원인 원소", "positive": "ca-08-3", "negatives": ["ca-08-1", "ca-08-2", "ca-08-4"], "false_negative": null}
+{"id": "qa-039", "query": "물체가 이중으로 비쳐 보이는 광물", "positive": "ca-08-4", "negatives": ["ca-08-1", "ca-08-2", "ca-08-3"], "false_negative": null}
+{"id": "qa-040", "query": "합성 루비 상업 생산은 언제 시작됐나", "positive": "ca-08-3", "negatives": ["ca-08-1", "ca-08-4"], "false_negative": null}
+{"id": "qa-041", "query": "헬륨은 어떻게 처음 발견되었나", "positive": "ca-09-1", "negatives": ["ca-09-2", "ca-09-3", "ca-09-4"], "false_negative": null}
+{"id": "qa-042", "query": "끓는점이 가장 낮은 원소", "positive": "ca-09-1", "negatives": ["ca-09-2", "ca-09-3"], "false_negative": null}
+{"id": "qa-043", "query": "네온사인 불빛은 무슨 색일까", "positive": "ca-09-2", "negatives": ["ca-09-1", "ca-09-3", "ca-09-4"], "false_negative": null}
+{"id": "qa-044", "query": "공기 중에 가장 많이 들어 있는 비활성 기체", "positive": "ca-09-3", "negatives": ["ca-09-1", "ca-09-2", "ca-09-4"], "false_negative": "ca-09-t"}
+{"id": "qa-045", "query": "비활성 기체 화합물이 처음 합성된 해", "positive": "ca-09-4", "negatives": ["ca-09-1", "ca-09-2", "ca-09-3"], "false_negative": null}
+{"id": "qa-046", "query": "전파를 실험으로 처음 만들어 낸 과학자", "positive": "ca-10-1", "negatives": ["ca-10-2", "ca-10-3", "ca-10-4"], "false_negative": null}
+{"id": "qa-047", "query": "열화상 카메라가 감지하는 빛", "positive": "ca-10-2", "negatives": ["ca-10-1", "ca-10-3", "ca-10-4"], "false_negative": null}
+{"id": "qa-048", "query": "UVA UVB UVC 파장 범위 차이", "positive": "ca-10-3", "negatives": ["ca-10-1", "ca-10-2", "ca-10-4"], "false_negative": null}
+{"id": "qa-049", "query": "엑스선에 X라는 글자를 붙인 이유", "positive": "ca-10-4", "negatives": ["ca-10-1", "ca-10-2", "ca-10-3"], "false_negative": null}
+{"id": "qa-050", "query": "적외선을 발견한 사람과 실험 방법", "positive": "ca-10-2", "negatives": ["ca-10-1", "ca-10-3"], "false_negative": null}
+{"id": "qa-051", "query": "기본 상호작용 중 제일 약한 힘", "positive": "ca-11-1", "negatives": ["ca-11-2", "ca-11-3", "ca-11-4"], "false_negative": null}
+{"id": "qa-052", "query": "중력파 첫 검출 발표 연도", "positive": "ca-11-1", "negatives": ["ca-11-2", "ca-11-3"], "false_negative": null}
+{"id": "qa-053", "query": "전자기력을 매개하는 입자는?", "positive": "ca-11-2", "negatives": ["ca-11-1", "ca-11-3", "ca-11-4"], "false_negative": null}
+{"id": "qa-054", "query": "쿼크를 단독으로 관측할 수 없는 이유", "positive": "ca-11-3", "negatives": ["ca-11-1", "ca-11-2", "ca-11-4"], "false_negative": null}
+{"id": "qa-055", "query": "W Z 보손 발견 연도와 장소", "positive": "ca-11-4", "negatives": ["ca-11-1", "ca-11-2", "ca-11-3"], "false_negative": null}
+{"id": "qa-056", "query": "세포에서 ATP를 가장 많이 만드는 소기관", "positive": "ca-12-1", "negatives": ["ca-12-2", "ca-12-3", "ca-12-4"], "false_negative": "ca-12-t"}
+{"id": "qa-057", "query": "미토콘드리아 DNA가 엄마에게서만 오는 이유", "positive": "ca-12-1", "negatives": ["ca-12-2", "ca-12-3"], "false_negative": null}
+{"id": "qa-058", "query": "식물 잎이 초록색으로 보이는 이유", "positive": "ca-12-2", "negatives": ["ca-12-1", "ca-12-3", "ca-12-4"], "false_negative": null}
+{"id": "qa-059", "query": "원핵세포와 진핵세포 리보솜 크기 차이", "positive": "ca-12-3", "negatives": ["ca-12-1", "ca-12-2", "ca-12-4"], "false_negative": null}
+{"id": "qa-060", "query": "골지체를 처음 발견한 사람은 누구인가", "positive": "ca-12-4", "negatives": ["ca-12-1", "ca-12-2", "ca-12-3"], "false_negative": null}
+{"id": "qa-061", "query": "적혈구 수명은 며칠", "positive": "ca-13-1", "negatives": ["ca-13-2", "ca-13-3", "ca-13-4"], "false_negative": null}
+{"id": "qa-062", "query": "백혈구 중 비율이 가장 높은 종류", "positive": "ca-13-2", "negatives": ["ca-13-1", "ca-13-3", "ca-13-4"], "false_negative": null}
+{"id": "qa-063", "query": "혈소판은 어떤 세포에서 떨어져 나오나", "positive": "ca-13-3", "negatives": ["ca-13-1", "ca-13-2", "ca-13-4"], "false_negative": null}
+{"id": "qa-064", "query": "혈장과 혈청의 차이점", "positive": "ca-13-4", "negatives": ["ca-13-1", "ca-13-2", "ca-13-3"], "false_negative": null}
+{"id": "qa-065", "query": "사람 피가 빨간색인 이유", "positive": "ca-13-1", "negatives": ["ca-13-2", "ca-13-4"], "false_negative": null}
+{"id": "qa-066", "query": "심장 판막 네 개 이름", "positive": "ca-14-1", "negatives": ["ca-14-2", "ca-14-3", "ca-14-4"], "false_negative": null}
+{"id": "qa-067", "query": "사람 몸에서 가장 큰 내장 기관은?", "positive": "ca-14-2", "negatives": ["ca-14-1", "ca-14-3", "ca-14-4"], "false_negative": null}
+{"id": "qa-068", "query": "쓸개즙은 어느 기관에서 만들어지나", "positive": "ca-14-2", "negatives": ["ca-14-1", "ca-14-3", "ca-14-4"], "false_negative": "ca-14-t"}
+{"id": "qa-069", "query": "하루 원뇨량과 실제 소변량", "positive": "ca-14-3", "negatives": ["ca-14-1", "ca-14-2", "ca-14-4"], "false_negative": null}
+{"id": "qa-070", "query": "허파꽈리에서 기체가 교환되는 원리", "positive": "ca-14-4", "negatives": ["ca-14-1", "ca-14-2", "ca-14-3"], "false_negative": null}
+{"id": "qa-071", "query": "티라노사우루스 렉스 학명의 뜻", "positive": "ca-15-1", "negatives": ["ca-15-2", "ca-15-3", "ca-15-4"], "false_negative": null}
+{"id": "qa-072", "query": "가장 온전하게 남은 티라노사우루스 화석", "positive": "ca-15-1", "negatives": ["ca-15-2", "ca-15-3"], "false_negative": null}
+{"id": "qa-073", "query": "트리케라톱스 뿔은 몇 개이고 어디 있나", "positive": "ca-15-2", "negatives": ["ca-15-1", "ca-15-3", "ca-15-4"], "false_negative": null}
+{"id": "qa-074", "query": "벨로키랍토르에게 깃털이 있었다는 증거", "positive": "ca-15-3", "negatives": ["ca-15-1", "ca-15-2", "ca-15-4"], "false_negative": null}
+{"id": "qa-075", "query": "앞다리가 뒷다리보다 긴 용각류 공룡", "positive": "ca-15-4", "negatives": ["ca-15-1", "ca-15-2", "ca-15-3"], "false_negative": null}
+{"id": "qa-076", "query": "지리산 반달가슴곰 복원 사업은 언제 시작했나", "positive": "ca-16-1", "negatives": ["ca-16-2", "ca-16-3", "ca-16-4"], "false_negative": null}
+{"id": "qa-077", "query": "수달 천연기념물 지정 번호", "positive": "ca-16-2", "negatives": ["ca-16-1", "ca-16-3", "ca-16-4"], "false_negative": null}
+{"id": "qa-078", "query": "산양이 바위 절벽을 잘 타는 까닭", "positive": "ca-16-3", "negatives": ["ca-16-1", "ca-16-2", "ca-16-4"], "false_negative": null}
+{"id": "qa-079", "query": "우리나라 마지막 야생 황새는 어떻게 사라졌나", "positive": "ca-16-4", "negatives": ["ca-16-1", "ca-16-2", "ca-16-3"], "false_negative": null}
+{"id": "qa-080", "query": "수달은 주로 무엇을 먹고 사나", "positive": "ca-16-2", "negatives": ["ca-16-1", "ca-16-3"], "false_negative": null}
+{"id": "qa-081", "query": "지구 역사상 가장 큰 동물", "positive": "ca-17-1", "negatives": ["ca-17-2", "ca-17-3", "ca-17-4"], "false_negative": null}
+{"id": "qa-082", "query": "흰긴수염고래 상업 포경 금지 연도", "positive": "ca-17-1", "negatives": ["ca-17-2", "ca-17-4"], "false_negative": null}
+{"id": "qa-083", "query": "범고래 수컷 등지느러미 높이", "positive": "ca-17-2", "negatives": ["ca-17-1", "ca-17-3", "ca-17-4"], "false_negative": null}
+{"id": "qa-084", "query": "향고래 최대 잠수 깊이와 시간", "positive": "ca-17-3", "negatives": ["ca-17-1", "ca-17-2", "ca-17-4"], "false_negative": null}
+{"id": "qa-085", "query": "웃는 돌고래라는 별명이 붙은 고래", "positive": "ca-17-4", "negatives": ["ca-17-1", "ca-17-2", "ca-17-3"], "false_negative": null}
+{"id": "qa-086", "query": "천연기념물로 가장 많이 지정된 나무 종류", "positive": "ca-18-1", "negatives": ["ca-18-2", "ca-18-3", "ca-18-4"], "false_negative": null}
+{"id": "qa-087", "query": "살아 있는 화석 나무", "positive": "ca-18-2", "negatives": ["ca-18-1", "ca-18-3", "ca-18-4"], "false_negative": null}
+{"id": "qa-088", "query": "용문사 은행나무 높이와 둘레", "positive": "ca-18-2", "negatives": ["ca-18-1", "ca-18-3"], "false_negative": null}
+{"id": "qa-089", "query": "마을 어귀 정자나무로 흔히 심던 나무", "positive": "ca-18-3", "negatives": ["ca-18-1", "ca-18-2", "ca-18-4"], "false_negative": null}
+{"id": "qa-090", "query": "항암제 택솔 원료가 되는 나무", "positive": "ca-18-4", "negatives": ["ca-18-1", "ca-18-2", "ca-18-3"], "false_negative": null}
+{"id": "qa-091", "query": "꼭대기가 모루 모양으로 퍼지는 구름", "positive": "ca-19-1", "negatives": ["ca-19-2", "ca-19-3", "ca-19-4"], "false_negative": null}
+{"id": "qa-092", "query": "새털구름은 무엇으로 이루어져 있나", "positive": "ca-19-2", "negatives": ["ca-19-1", "ca-19-3", "ca-19-4"], "false_negative": null}
+{"id": "qa-093", "query": "이슬비를 뿌리는 낮은 회색 구름", "positive": "ca-19-3", "negatives": ["ca-19-1", "ca-19-2", "ca-19-4"], "false_negative": null}
+{"id": "qa-094", "query": "뭉게구름은 어떻게 생기나", "positive": "ca-19-4", "negatives": ["ca-19-1", "ca-19-2", "ca-19-3"], "false_negative": null}
+{"id": "qa-095", "query": "우박과 돌풍을 몰고 오는 구름", "positive": "ca-19-1", "negatives": ["ca-19-2", "ca-19-3"], "false_negative": null}
+{"id": "qa-096", "query": "지구 생물 종이 가장 많이 사는 숲", "positive": "ca-20-1", "negatives": ["ca-20-2", "ca-20-3", "ca-20-4"], "false_negative": null}
+{"id": "qa-097", "query": "사바나 건기는 몇 달이나 계속되나", "positive": "ca-20-2", "negatives": ["ca-20-1", "ca-20-3", "ca-20-4"], "false_negative": null}
+{"id": "qa-098", "query": "툰드라 지역에 숲이 없는 까닭", "positive": "ca-20-3", "negatives": ["ca-20-1", "ca-20-2", "ca-20-4"], "false_negative": null}
+{"id": "qa-099", "query": "세계에서 가장 넓은 육상 생물군계", "positive": "ca-20-4", "negatives": ["ca-20-1", "ca-20-2", "ca-20-3"], "false_negative": null}
+{"id": "qa-100", "query": "열대 우림 흙이 척박한 까닭", "positive": "ca-20-1", "negatives": ["ca-20-3", "ca-20-4"], "false_negative": null}
+{"id": "qa-101", "query": "우리나라 제1호 국립공원은 어디", "positive": "ca-21-1", "negatives": ["ca-21-2", "ca-21-3", "ca-21-4"], "false_negative": "ca-21-t"}
+{"id": "qa-102", "query": "설악산 대청봉 해발 높이", "positive": "ca-21-2", "negatives": ["ca-21-1", "ca-21-3", "ca-21-4"], "false_negative": null}
+{"id": "qa-103", "query": "한라산 꼭대기 화구호 이름", "positive": "ca-21-3", "negatives": ["ca-21-1", "ca-21-2", "ca-21-4"], "false_negative": null}
+{"id": "qa-104", "query": "면적 대비 방문객이 제일 많은 국립공원", "positive": "ca-21-4", "negatives": ["ca-21-1", "ca-21-2", "ca-21-3"], "false_negative": null}
+{"id": "qa-105", "query": "설악산 생물권 보전 지역 지정 연도", "positive": "ca-21-2", "negatives": ["ca-21-3", "ca-21-4"], "false_negative": null}
+{"id": "qa-106", "query": "남한에서 가장 긴 강은?", "positive": "ca-22-2", "negatives": ["ca-22-1", "ca-22-3", "ca-22-4"], "false_negative": null}
+{"id": "qa-107", "query": "남한강과 북한강이 합쳐지는 곳", "positive": "ca-22-1", "negatives": ["ca-22-2", "ca-22-3", "ca-22-4"], "false_negative": null}
+{"id": "qa-108", "query": "금강 물줄기가 시작되는 샘", "positive": "ca-22-3", "negatives": ["ca-22-1", "ca-22-2", "ca-22-4"], "false_negative": null}
+{"id": "qa-109", "query": "영산강이라는 이름의 유래", "positive": "ca-22-4", "negatives": ["ca-22-1", "ca-22-2", "ca-22-3"], "false_negative": null}
+{"id": "qa-110", "query": "고구려 사람들이 한강을 부르던 이름", "positive": "ca-22-1", "negatives": ["ca-22-2", "ca-22-3"], "false_negative": null}
+{"id": "qa-111", "query": "제주도에 있는 오름 개수", "positive": "ca-23-1", "negatives": ["ca-23-2", "ca-23-3", "ca-23-4"], "false_negative": null}
+{"id": "qa-112", "query": "우산국을 신라에 복속시킨 장수", "positive": "ca-23-2", "negatives": ["ca-23-1", "ca-23-3", "ca-23-4"], "false_negative": null}
+{"id": "qa-113", "query": "제주도 다음으로 면적이 넓은 섬", "positive": "ca-23-3", "negatives": ["ca-23-1", "ca-23-2", "ca-23-4"], "false_negative": null}
+{"id": "qa-114", "query": "강화 고인돌 세계 유산 등재 연도", "positive": "ca-23-4", "negatives": ["ca-23-1", "ca-23-2", "ca-23-3"], "false_negative": null}
+{"id": "qa-115", "query": "울릉도 나리분지는 어떻게 생겼나", "positive": "ca-23-2", "negatives": ["ca-23-1", "ca-23-3"], "false_negative": null}
+{"id": "qa-116", "query": "국내 첫 람사르 습지", "positive": "ca-24-3", "negatives": ["ca-24-1", "ca-24-2", "ca-24-4"], "false_negative": null}
+{"id": "qa-117", "query": "한국에서 가장 큰 내륙 습지", "positive": "ca-24-2", "negatives": ["ca-24-1", "ca-24-3", "ca-24-4"], "false_negative": null}
+{"id": "qa-118", "query": "순천만 갈대밭 넓이", "positive": "ca-24-1", "negatives": ["ca-24-2", "ca-24-3", "ca-24-4"], "false_negative": null}
+{"id": "qa-119", "query": "세계 유산 한국의 갯벌을 이루는 네 곳", "positive": "ca-24-4", "negatives": ["ca-24-1", "ca-24-2", "ca-24-3"], "false_negative": null}
+{"id": "qa-120", "query": "우포늪은 언제 생겨났을까", "positive": "ca-24-2", "negatives": ["ca-24-3", "ca-24-4"], "false_negative": null}
+{"id": "qa-121", "query": "에베레스트 정상에 처음 오른 사람들", "positive": "ca-25-1", "negatives": ["ca-25-2", "ca-25-3", "ca-25-4"], "false_negative": "ca-25-t"}
+{"id": "qa-122", "query": "K2라는 이름은 어떻게 붙었나", "positive": "ca-25-2", "negatives": ["ca-25-1", "ca-25-3", "ca-25-4"], "false_negative": null}
+{"id": "qa-123", "query": "아프리카 최고봉의 높이", "positive": "ca-25-3", "negatives": ["ca-25-1", "ca-25-2", "ca-25-4"], "false_negative": null}
+{"id": "qa-124", "query": "몽블랑은 언제 누가 처음 올랐나", "positive": "ca-25-4", "negatives": ["ca-25-1", "ca-25-2", "ca-25-3"], "false_negative": null}
+{"id": "qa-125", "query": "한국인 최초 에베레스트 등정자", "positive": "ca-25-1", "negatives": ["ca-25-2", "ca-25-3"], "false_negative": null}
+{"id": "qa-126", "query": "청나일과 백나일이 만나는 도시", "positive": "ca-26-1", "negatives": ["ca-26-2", "ca-26-3", "ca-26-4"], "false_negative": null}
+{"id": "qa-127", "query": "유량이 세계에서 가장 많은 강", "positive": "ca-26-2", "negatives": ["ca-26-1", "ca-26-3", "ca-26-4"], "false_negative": null}
+{"id": "qa-128", "query": "싼샤 댐 발전 설비 용량", "positive": "ca-26-3", "negatives": ["ca-26-1", "ca-26-2", "ca-26-4"], "false_negative": null}
+{"id": "qa-129", "query": "미시시피라는 강 이름의 뜻", "positive": "ca-26-4", "negatives": ["ca-26-1", "ca-26-2", "ca-26-3"], "false_negative": null}
+{"id": "qa-130", "query": "아스완 하이 댐은 언제 완공됐나", "positive": "ca-26-1", "negatives": ["ca-26-3", "ca-26-4"], "false_negative": null}
+{"id": "qa-131", "query": "더운 사막 가운데 가장 넓은 곳", "positive": "ca-27-1", "negatives": ["ca-27-2", "ca-27-3", "ca-27-4"], "false_negative": null}
+{"id": "qa-132", "query": "봄철 황사가 주로 날아오는 사막", "positive": "ca-27-2", "negatives": ["ca-27-1", "ca-27-3", "ca-27-4"], "false_negative": null}
+{"id": "qa-133", "query": "극지방 빼고 가장 건조한 사막", "positive": "ca-27-3", "negatives": ["ca-27-1", "ca-27-2", "ca-27-4"], "false_negative": null}
+{"id": "qa-134", "query": "가장 오랜 세월 건조했던 사막", "positive": "ca-27-4", "negatives": ["ca-27-1", "ca-27-2", "ca-27-3"], "false_negative": null}
+{"id": "qa-135", "query": "불타는 절벽 공룡알 화석 발견지", "positive": "ca-27-2", "negatives": ["ca-27-1", "ca-27-3"], "false_negative": null}
+{"id": "qa-136", "query": "제일 깊은 호수와 최대 수심", "positive": "ca-28-1", "negatives": ["ca-28-2", "ca-28-3", "ca-28-4"], "false_negative": null}
+{"id": "qa-137", "query": "카스피해를 둘러싼 다섯 나라", "positive": "ca-28-2", "negatives": ["ca-28-1", "ca-28-3", "ca-28-4"], "false_negative": null}
+{"id": "qa-138", "query": "표면적이 가장 넓은 민물 호수", "positive": "ca-28-3", "negatives": ["ca-28-1", "ca-28-2", "ca-28-4"], "false_negative": null}
+{"id": "qa-139", "query": "갈대로 엮은 떠 있는 섬이 있는 호수", "positive": "ca-28-4", "negatives": ["ca-28-1", "ca-28-2", "ca-28-3"], "false_negative": null}
+{"id": "qa-140", "query": "바이칼호에서 흘러나가는 강 이름", "positive": "ca-28-1", "negatives": ["ca-28-3", "ca-28-4"], "false_negative": null}
+{"id": "qa-141", "query": "이구아수 폭포는 폭포 몇 개로 이루어졌나", "positive": "ca-29-1", "negatives": ["ca-29-2", "ca-29-3", "ca-29-4"], "false_negative": null}
+{"id": "qa-142", "query": "천둥 치는 연기라는 뜻의 폭포", "positive": "ca-29-2", "negatives": ["ca-29-1", "ca-29-3", "ca-29-4"], "false_negative": null}
+{"id": "qa-143", "query": "나이아가라 폭포를 이루는 세 폭포 이름", "positive": "ca-29-3", "negatives": ["ca-29-1", "ca-29-2", "ca-29-4"], "false_negative": null}
+{"id": "qa-144", "query": "세계에서 제일 높은 폭포와 그 낙차", "positive": "ca-29-4", "negatives": ["ca-29-1", "ca-29-2", "ca-29-3"], "false_negative": "ca-29-t"}
+{"id": "qa-145", "query": "과라니어로 큰 물을 뜻하는 폭포", "positive": "ca-29-1", "negatives": ["ca-29-2", "ca-29-3"], "false_negative": null}
+{"id": "qa-146", "query": "후지산이 마지막으로 분화한 해", "positive": "ca-30-1", "negatives": ["ca-30-2", "ca-30-3", "ca-30-4"], "false_negative": null}
+{"id": "qa-147", "query": "폼페이를 화산재로 덮은 화산", "positive": "ca-30-2", "negatives": ["ca-30-1", "ca-30-3", "ca-30-4"], "false_negative": null}
+{"id": "qa-148", "query": "불의 여신 펠레가 산다는 분화구", "positive": "ca-30-3", "negatives": ["ca-30-1", "ca-30-2", "ca-30-4"], "false_negative": null}
+{"id": "qa-149", "query": "유럽 최고 높이의 활화산", "positive": "ca-30-4", "negatives": ["ca-30-1", "ca-30-2", "ca-30-3"], "false_negative": null}
+{"id": "qa-150", "query": "플리니식 분화라는 이름은 어디서 왔나", "positive": "ca-30-2", "negatives": ["ca-30-1", "ca-30-3"], "false_negative": null}

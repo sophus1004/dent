@@ -1,0 +1,226 @@
+{"id": "qa-0001", "passage": "pa-001", "question": "세종이 만든 새 글자는 처음에 모두 몇 자였나요?", "answer": "28자", "kind": "normal"}
+{"id": "qa-0002", "passage": "pa-001", "question": "훈민정음 해례본 첫 번째 발견 장소", "answer": "경상북도 안동", "kind": "normal"}
+{"id": "qa-0003", "passage": "pa-001", "question": "세종이 새 문자를 온 나라에 반포한 연도가 궁금해요", "answer": "1446년", "kind": "normal"}
+{"id": "qa-0004", "passage": "pa-001", "question": "이 글에서 해례본 집필에 참여했다고 나오는 학자들은 누구누구야?", "answer": "정인지·신숙주·성삼문·최항·박팽년", "kind": "context"}
+{"id": "qa-0005", "passage": "pa-002", "question": "팔만대장경 경판을 만들 때 주로 쓴 나무는?", "answer": "산벚나무와 돌배나무", "kind": "normal"}
+{"id": "qa-0006", "passage": "pa-002", "question": "고려가 대장경을 새기려고 세운 관청은 어디에 있었어?", "answer": "강화도", "kind": "normal"}
+{"id": "qa-0007", "passage": "pa-002", "question": "해인사 대장경판 현재 남은 판 수", "answer": "81,352장", "kind": "normal"}
+{"id": "qa-0008", "passage": "pa-003", "question": "직지 금속활자본을 지금 보관하는 곳", "answer": "프랑스 국립도서관", "kind": "normal"}
+{"id": "qa-0009", "passage": "pa-003", "question": "직지를 금속 활자로 찍어 낸 절은 어디인가요?", "answer": "청주 흥덕사", "kind": "normal"}
+{"id": "qa-0010", "passage": "pa-003", "question": "직지가 세계에서 가장 오래된 금속활자본이라고 처음 알린 사람은?", "answer": "박병선", "kind": "normal"}
+{"id": "qa-0011", "passage": "pa-003", "question": "직지", "answer": "직지", "kind": "short"}
+{"id": "qa-0012", "passage": "pa-004", "question": "측우기 처음 만든 해", "answer": "1441년", "kind": "normal"}
+{"id": "qa-0013", "passage": "pa-004", "question": "측우기를 올려 두는 돌 받침은 뭐라고 불러?", "answer": "측우대", "kind": "normal"}
+{"id": "qa-0014", "passage": "pa-004", "question": "조선의 비 측정 제도가 유럽보다 앞섰나요?", "answer": "약 200년 이른", "kind": "normal"}
+{"id": "qa-0015", "passage": "pa-005", "question": "첨성대는 돌을 몇 개나 써서 쌓았어?", "answer": "362개", "kind": "normal"}
+{"id": "qa-0016", "passage": "pa-005", "question": "첨성대 창문이 향한 방향", "answer": "정남쪽", "kind": "normal"}
+{"id": "qa-0017", "passage": "pa-005", "question": "이 문서에 따르면 2016년 지진 때 석축 틈은 얼마나 벌어졌나요?", "answer": "약 1.2센티미터", "kind": "context"}
+{"id": "qa-0018", "passage": "pa-006", "question": "석굴암 창건을 시작한 신라 재상 이름", "answer": "김대성", "kind": "normal"}
+{"id": "qa-0019", "passage": "pa-006", "question": "석굴암은 처음에 어떤 절 이름으로 불렸나", "answer": "석불사", "kind": "normal"}
+{"id": "qa-0020", "passage": "pa-006", "question": "석굴암과 불국사가 세계유산이 된 해는?", "answer": "1995년", "kind": "normal"}
+{"id": "qa-0021", "passage": "pa-007", "question": "조선왕조실록에 담긴 기간은 몇 년이야?", "answer": "472년", "kind": "normal"}
+{"id": "qa-0022", "passage": "pa-007", "question": "임진왜란 때 불타지 않고 살아남은 실록은 어느 사고 것이었나요", "answer": "전주 사고본", "kind": "normal"}
+{"id": "qa-0023", "passage": "pa-007", "question": "고종실록과 순종실록을 조선왕조실록에서 빼는 까닭", "answer": "전통적인 편찬 규칙을 따르지 않았다", "kind": "normal"}
+{"id": "qa-0024", "passage": "pa-007", "question": "조선 시대 기록 가운데 임금이 세상을 떠난 뒤에야 춘추관에서 정리했고 살아 있는 임금은 들춰 볼 수도 없었다는 역사책이 있다고 들었는데, 그 기록 전체가 몇 권 몇 책으로 되어 있는지, 그리고 글자 수는 대략 어느 정도인지 알려 줄 수 있나요?", "answer": "1,894권 888책", "kind": "long"}
+{"id": "qa-0025", "passage": "pa-008", "question": "광개토대왕비에 새겨진 글자는 몇 자야?", "answer": "1,775자", "kind": "normal"}
+{"id": "qa-0026", "passage": "pa-008", "question": "광개토왕릉비를 세운 고구려 왕", "answer": "장수왕", "kind": "normal"}
+{"id": "qa-0027", "passage": "pa-008", "question": "광개토대왕릉비는 지금 어디에 있나요?", "answer": "중국 지린성 지안시 태왕진", "kind": "normal"}
+{"id": "qa-0028", "passage": "pa-009", "question": "화성 공사에 쓰인 거중기를 고안한 사람", "answer": "정약용", "kind": "normal"}
+{"id": "qa-0029", "passage": "pa-009", "question": "수원 화성의 북문 이름이 뭐지?", "answer": "장안문", "kind": "normal"}
+{"id": "qa-0030", "passage": "pa-009", "question": "전쟁으로 부서진 화성을 되살릴 때 화성성역의궤는 어떤 도움을 줬나?", "answer": "옛 모습대로 복원", "kind": "normal"}
+{"id": "qa-0031", "passage": "pa-010", "question": "대동여지도 축척은 어느 정도였나요", "answer": "21만 6천분의 1", "kind": "normal"}
+{"id": "qa-0032", "passage": "pa-010", "question": "김정호가 1834년에 만든 지도 이름", "answer": "청구도", "kind": "normal"}
+{"id": "qa-0033", "passage": "pa-010", "question": "대동여지도에서 길 위의 점은 몇 리 간격으로 찍혀 있어?", "answer": "10리마다", "kind": "normal"}
+{"id": "qa-0034", "passage": "pa-011", "question": "동의보감을 편찬한 의관은 누구인가요?", "answer": "허준", "kind": "normal"}
+{"id": "qa-0035", "passage": "pa-011", "question": "동의보감 간행 연도", "answer": "1613년", "kind": "normal"}
+{"id": "qa-0036", "passage": "pa-011", "question": "동의보감에서 침과 뜸을 다룬 부분의 이름은?", "answer": "침구편", "kind": "normal"}
+{"id": "qa-0037", "passage": "pa-012", "question": "삼국사기 편찬을 명령한 고려 임금", "answer": "인종", "kind": "normal"}
+{"id": "qa-0038", "passage": "pa-012", "question": "삼국사기는 어떤 서술 체재로 쓰였나?", "answer": "기전체", "kind": "normal"}
+{"id": "qa-0039", "passage": "pa-012", "question": "삼국사기에서 신라 역사를 다룬 본기는 몇 권이야", "answer": "12권", "kind": "normal"}
+{"id": "qa-0040", "passage": "pa-013", "question": "한라산 꼭대기 분화구 호수 이름", "answer": "백록담", "kind": "normal"}
+{"id": "qa-0041", "passage": "pa-013", "question": "한라산이 국립공원으로 지정된 날짜는?", "answer": "1970년 3월 24일", "kind": "normal"}
+{"id": "qa-0042", "passage": "pa-013", "question": "한라산 정상 근처에 숲을 이루는 한국 특산 나무는 뭐야?", "answer": "구상나무", "kind": "normal"}
+{"id": "qa-0043", "passage": "pa-014", "question": "천지에서 가장 깊은 곳은 몇 미터인가요?", "answer": "384미터", "kind": "normal"}
+{"id": "qa-0044", "passage": "pa-014", "question": "백두산이 마지막으로 분화한 해", "answer": "1925년", "kind": "normal"}
+{"id": "qa-0045", "passage": "pa-014", "question": "중국에서는 백두산을 뭐라고 불러?", "answer": "창바이산", "kind": "normal"}
+{"id": "qa-0046", "passage": "pa-015", "question": "지리산에서 제일 높은 봉우리", "answer": "천왕봉", "kind": "normal"}
+{"id": "qa-0047", "passage": "pa-015", "question": "우리나라 첫 국립공원 지정일은 언제였나요?", "answer": "1967년 12월 29일", "kind": "normal"}
+{"id": "qa-0048", "passage": "pa-015", "question": "지리산에서 되살리는 사업을 벌이고 있는 동물은?", "answer": "반달가슴곰", "kind": "normal"}
+{"id": "qa-0049", "passage": "pa-016", "question": "경복궁이라는 이름을 붙인 사람은 누구야?", "answer": "정도전", "kind": "normal"}
+{"id": "qa-0050", "passage": "pa-016", "question": "임진왜란 뒤 경복궁 재건을 이끈 인물", "answer": "흥선대원군", "kind": "normal"}
+{"id": "qa-0051", "passage": "pa-016", "question": "경복궁 정전 이름", "answer": "근정전", "kind": "normal"}
+{"id": "qa-0052", "passage": "pa-017", "question": "국내에서 가장 무거운 고인돌 덮개돌은 몇 톤이나 돼?", "answer": "280톤 정도", "kind": "normal"}
+{"id": "qa-0053", "passage": "pa-017", "question": "고창 화순 강화 고인돌 세계유산 등재 날짜", "answer": "2000년 12월 2일", "kind": "normal"}
+{"id": "qa-0054", "passage": "pa-017", "question": "고인돌", "answer": "고인돌", "kind": "short"}
+{"id": "qa-0055", "passage": "pa-018", "question": "로제타석은 언제 발견됐나요?", "answer": "1799년 7월 15일", "kind": "normal"}
+{"id": "qa-0056", "passage": "pa-018", "question": "로제타석 소장 박물관", "answer": "영국 박물관", "kind": "normal"}
+{"id": "qa-0057", "passage": "pa-018", "question": "이집트 상형문자 해독에 성공한 프랑스 학자는?", "answer": "장프랑수아 샹폴리옹", "kind": "normal"}
+{"id": "qa-0058", "passage": "pa-019", "question": "마그나 카르타를 승인한 잉글랜드 왕", "answer": "존 왕", "kind": "normal"}
+{"id": "qa-0059", "passage": "pa-019", "question": "마그나카르타를 무효라고 선언한 교황은?", "answer": "인노첸시오 3세", "kind": "normal"}
+{"id": "qa-0060", "passage": "pa-019", "question": "1215년에 만든 대헌장 사본은 지금 몇 부가 남았어?", "answer": "네 부", "kind": "normal"}
+{"id": "qa-0061", "passage": "pa-020", "question": "42행 성서는 현재 몇 부 정도 전해지나", "answer": "49부 정도", "kind": "normal"}
+{"id": "qa-0062", "passage": "pa-020", "question": "구텐베르크가 인쇄기로 개조한 기계는 원래 무엇이었나요?", "answer": "포도를 짜던 압착기", "kind": "normal"}
+{"id": "qa-0063", "passage": "pa-020", "question": "그는 어느 도시에서 태어났나요?", "answer": "독일 마인츠", "kind": "context"}
+{"id": "qa-0064", "passage": "pa-021", "question": "폼페이를 덮친 화산 이름", "answer": "베수비오 화산", "kind": "normal"}
+{"id": "qa-0065", "passage": "pa-021", "question": "폼페이 발굴이 본격적으로 시작된 연도", "answer": "1748년", "kind": "normal"}
+{"id": "qa-0066", "passage": "pa-021", "question": "베수비오 분화 장면을 편지로 기록한 사람은?", "answer": "소 플리니우스", "kind": "normal"}
+{"id": "qa-0067", "passage": "pa-022", "question": "비단길이라는 이름을 널리 알린 독일 학자", "answer": "페르디난트 폰 리히트호펜", "kind": "normal"}
+{"id": "qa-0068", "passage": "pa-022", "question": "실크로드 동쪽 끝이던 장안은 지금 어느 도시야?", "answer": "시안", "kind": "normal"}
+{"id": "qa-0069", "passage": "pa-022", "question": "실크로드 총길이는 얼마나 되나요", "answer": "6,400킬로미터가 넘는다", "kind": "normal"}
+{"id": "qa-0070", "passage": "pa-023", "question": "기자 대피라미드는 누구의 무덤인가요?", "answer": "쿠푸", "kind": "normal"}
+{"id": "qa-0071", "passage": "pa-023", "question": "대피라미드 지금 높이", "answer": "138.9미터", "kind": "normal"}
+{"id": "qa-0072", "passage": "pa-023", "question": "대피라미드가 세계에서 가장 높은 건축물 자리를 내준 해는?", "answer": "1311년", "kind": "normal"}
+{"id": "qa-0073", "passage": "pa-024", "question": "베를린 장벽 감시탑 개수", "answer": "302개", "kind": "normal"}
+{"id": "qa-0074", "passage": "pa-024", "question": "베를린 장벽이 열린 날은 언제야?", "answer": "1989년 11월 9일", "kind": "normal"}
+{"id": "qa-0075", "passage": "pa-024", "question": "여행 제한 해제를 발표한 동독 대변인 이름", "answer": "귄터 샤보브스키", "kind": "normal"}
+{"id": "qa-0076", "passage": "pa-025", "question": "콜로세움 공사를 마무리한 로마 황제는?", "answer": "티투스", "kind": "normal"}
+{"id": "qa-0077", "passage": "pa-025", "question": "콜로세움은 관중을 최대 몇 명까지 받을 수 있었나", "answer": "8만 7천 명", "kind": "normal"}
+{"id": "qa-0078", "passage": "pa-026", "question": "마젤란 원정대가 출항한 날짜", "answer": "1519년 9월 20일", "kind": "normal"}
+{"id": "qa-0079", "passage": "pa-026", "question": "마젤란이 전사한 필리핀 섬 이름", "answer": "막탄섬", "kind": "normal"}
+{"id": "qa-0080", "passage": "pa-026", "question": "마젤란 함대 가운데 끝까지 돌아온 배는?", "answer": "빅토리아호", "kind": "normal"}
+{"id": "qa-0081", "passage": "pa-026", "question": "대항해 시대에 포르투갈 출신 항해가가 에스파냐 왕의 후원으로 서쪽 항로를 찾아 떠났다가 필리핀에서 전투 중에 숨졌다고 하던데, 그 뒤 남은 선원들을 이끌고 항해를 끝마쳐서 에스파냐 왕실로부터 처음으로 세계를 한 바퀴 돈 사람으로 인정받은 인물은 누구인가요?", "answer": "후안 세바스티안 엘카노", "kind": "long"}
+{"id": "qa-0082", "passage": "pa-027", "question": "흑사병을 일으킨 세균 이름", "answer": "예르시니아 페스티스", "kind": "normal"}
+{"id": "qa-0083", "passage": "pa-027", "question": "흑사병이 유럽에 처음 상륙한 시칠리아 항구는?", "answer": "메시나 항", "kind": "normal"}
+{"id": "qa-0084", "passage": "pa-027", "question": "격리 기간을 40일로 늘린 도시는 어디였어?", "answer": "베네치아", "kind": "normal"}
+{"id": "qa-0085", "passage": "pa-028", "question": "앙코르와트를 처음 바친 힌두교 신", "answer": "비슈누", "kind": "normal"}
+{"id": "qa-0086", "passage": "pa-028", "question": "앙코르 와트 정문은 어느 쪽을 보고 있나요?", "answer": "서쪽", "kind": "normal"}
+{"id": "qa-0087", "passage": "pa-028", "question": "이 지문에서 앙코르 와트를 유럽에 알렸다고 소개한 사람은 누구야?", "answer": "앙리 무오", "kind": "context"}
+{"id": "qa-0088", "passage": "pa-029", "question": "마추픽추 해발 높이", "answer": "해발 2,430미터", "kind": "normal"}
+{"id": "qa-0089", "passage": "pa-029", "question": "마추픽추를 세계에 알린 미국 탐험가는?", "answer": "하이럼 빙엄", "kind": "normal"}
+{"id": "qa-0090", "passage": "pa-029", "question": "마추픽추 건설을 명령한 잉카 황제", "answer": "파차쿠티", "kind": "normal"}
+{"id": "qa-0091", "passage": "pa-030", "question": "DNA 이중나선 구조가 발표된 해", "answer": "1953년", "kind": "normal"}
+{"id": "qa-0092", "passage": "pa-030", "question": "사진 51을 촬영한 과학자는 누구인가요?", "answer": "로절린드 프랭클린", "kind": "normal"}
+{"id": "qa-0093", "passage": "pa-030", "question": "구아닌과 시토신은 수소 결합 몇 개로 이어져?", "answer": "수소 결합 세 개", "kind": "normal"}
+{"id": "qa-0094", "passage": "pa-031", "question": "페니실린을 처음 발견한 사람", "answer": "알렉산더 플레밍", "kind": "normal"}
+{"id": "qa-0095", "passage": "pa-031", "question": "페니실린을 약으로 대량 생산할 수 있게 만든 옥스퍼드 연구자들은 누구야?", "answer": "하워드 플로리와 에른스트 체인", "kind": "normal"}
+{"id": "qa-0096", "passage": "pa-031", "question": "페니실린은 어떤 원리로 세균을 죽이나요?", "answer": "세포벽을 약하게 만들고", "kind": "normal"}
+{"id": "qa-0097", "passage": "pa-032", "question": "주기율표를 맨 처음 발표한 러시아 화학자", "answer": "드미트리 멘델레예프", "kind": "normal"}
+{"id": "qa-0098", "passage": "pa-032", "question": "멘델레예프가 에카규소라고 부른 원소는 실제로 무엇으로 밝혀졌어?", "answer": "저마늄", "kind": "normal"}
+{"id": "qa-0099", "passage": "pa-032", "question": "지금 주기율표에 올라 있는 원소는 모두 몇 개인가요?", "answer": "118개", "kind": "normal"}
+{"id": "qa-0100", "passage": "pa-033", "question": "허블 망원경을 우주로 실어 나른 왕복선", "answer": "디스커버리호", "kind": "normal"}
+{"id": "qa-0101", "passage": "pa-033", "question": "허블 망원경 주거울 지름이 얼마야?", "answer": "2.4미터", "kind": "normal"}
+{"id": "qa-0102", "passage": "pa-034", "question": "제임스 웹 망원경 발사일", "answer": "2021년 12월 25일", "kind": "normal"}
+{"id": "qa-0103", "passage": "pa-034", "question": "웹 망원경 주거울은 육각형 조각 몇 개로 되어 있나요?", "answer": "18개", "kind": "normal"}
+{"id": "qa-0104", "passage": "pa-034", "question": "제임스 웹 망원경이 궤도를 도는 위치는 어디야?", "answer": "제2 라그랑주점(L2)", "kind": "normal"}
+{"id": "qa-0105", "passage": "pa-035", "question": "대륙 이동설을 처음 주장한 과학자", "answer": "알프레트 베게너", "kind": "normal"}
+{"id": "qa-0106", "passage": "pa-035", "question": "모든 대륙이 하나로 붙어 있던 땅덩어리를 베게너는 뭐라고 불렀나?", "answer": "판게아", "kind": "normal"}
+{"id": "qa-0107", "passage": "pa-035", "question": "베게너의 학설이 당시에 받아들여지지 않은 까닭은?", "answer": "대륙을 움직이는 힘을 설명하지 못해", "kind": "normal"}
+{"id": "qa-0108", "passage": "pa-036", "question": "멘델이 교배 실험에 쓴 식물은 뭐야?", "answer": "완두", "kind": "normal"}
+{"id": "qa-0109", "passage": "pa-036", "question": "멘델의 유전 연구가 다시 발견된 해", "answer": "1900년", "kind": "normal"}
+{"id": "qa-0110", "passage": "pa-037", "question": "종의 기원 초판은 몇 부 찍었어?", "answer": "1,500부", "kind": "normal"}
+{"id": "qa-0111", "passage": "pa-037", "question": "다윈이 세계를 돌 때 탄 측량선 이름", "answer": "비글호", "kind": "normal"}
+{"id": "qa-0112", "passage": "pa-037", "question": "다윈과 논문을 함께 발표한 박물학자는 누구인가요?", "answer": "앨프리드 러셀 월리스", "kind": "normal"}
+{"id": "qa-0113", "passage": "pa-038", "question": "폴란드 이름을 따서 지은 원소", "answer": "폴로늄", "kind": "normal"}
+{"id": "qa-0114", "passage": "pa-038", "question": "퀴리 부부가 노벨 물리학상을 받은 연도는?", "answer": "1903년", "kind": "normal"}
+{"id": "qa-0115", "passage": "pa-038", "question": "그녀는 노벨 화학상을 몇 년에 받았어?", "answer": "1911년", "kind": "context"}
+{"id": "qa-0116", "passage": "pa-039", "question": "제너가 우두를 처음 접종한 소년 이름", "answer": "제임스 핍스", "kind": "normal"}
+{"id": "qa-0117", "passage": "pa-039", "question": "천연두가 사라졌다고 WHO가 공식 발표한 날은?", "answer": "1980년 5월 8일", "kind": "normal"}
+{"id": "qa-0118", "passage": "pa-039", "question": "백신이라는 단어는 어디에서 유래했나요", "answer": "암소를 뜻하는 바카", "kind": "normal"}
+{"id": "qa-0119", "passage": "pa-040", "question": "1986년에 핼리 혜성 핵을 근접 촬영한 탐사선", "answer": "조토 탐사선", "kind": "normal"}
+{"id": "qa-0120", "passage": "pa-040", "question": "핼리 혜성 핵 크기는 어느 정도야?", "answer": "가로 14.9킬로미터, 세로 8.2킬로미터", "kind": "normal"}
+{"id": "qa-0121", "passage": "pa-040", "question": "몇십 년에 한 번씩 찾아오는 혜성 가운데 맨눈으로도 보인다는 유명한 혜성이 있다고 들었는데요, 그 혜성이 앞으로 언제 다시 태양에 가장 가깝게 다가올 것으로 예상되는지 궁금합니다. 가능하면 지난번에 태양 곁을 지나간 날짜와 비교해서 알려 주세요.", "answer": "2061년 7월 28일", "kind": "long"}
+{"id": "qa-0122", "passage": "pa-041", "question": "목성 질량은 지구보다 몇 배 무거워?", "answer": "약 318배", "kind": "normal"}
+{"id": "qa-0123", "passage": "pa-041", "question": "태양계 위성 중에서 가장 큰 것", "answer": "가니메데", "kind": "normal"}
+{"id": "qa-0124", "passage": "pa-041", "question": "주노 탐사선이 목성에 닿은 날짜는?", "answer": "2016년 7월 4일", "kind": "normal"}
+{"id": "qa-0125", "passage": "pa-042", "question": "하위헌스 탐사정이 내려앉은 토성 위성", "answer": "타이탄", "kind": "normal"}
+{"id": "qa-0126", "passage": "pa-042", "question": "카시니 탐사선을 일부러 토성 대기에 떨어뜨린 이유가 뭐야?", "answer": "생명체가 살 만한 위성을 오염시키는 일을 막으려고", "kind": "normal"}
+{"id": "qa-0127", "passage": "pa-043", "question": "보이저 1호 발사 날짜", "answer": "1977년 9월 5일", "kind": "normal"}
+{"id": "qa-0128", "passage": "pa-043", "question": "창백한 푸른 점 사진을 찍은 날은 언제인가요?", "answer": "1990년 2월 14일", "kind": "normal"}
+{"id": "qa-0129", "passage": "pa-043", "question": "이 문서에 나온 탐사선은 발사 당시 무게가 얼마였어?", "answer": "815킬로그램", "kind": "context"}
+{"id": "qa-0130", "passage": "pa-044", "question": "아폴로 11호 달 착륙선 이름", "answer": "이글", "kind": "normal"}
+{"id": "qa-0131", "passage": "pa-044", "question": "달에 내리지 않고 궤도에서 기다린 아폴로 11호 우주비행사는?", "answer": "마이클 콜린스", "kind": "normal"}
+{"id": "qa-0132", "passage": "pa-044", "question": "아폴로 11호가 달에서 가져온 월석과 흙은 몇 킬로그램?", "answer": "21.55킬로그램", "kind": "normal"}
+{"id": "qa-0133", "passage": "pa-045", "question": "국제우주정거장의 첫 번째 모듈 이름", "answer": "자랴", "kind": "normal"}
+{"id": "qa-0134", "passage": "pa-045", "question": "우주정거장에 처음 간 한국인은 누구야?", "answer": "이소연", "kind": "normal"}
+{"id": "qa-0135", "passage": "pa-045", "question": "ISS", "answer": "ISS", "kind": "short"}
+{"id": "qa-0136", "passage": "pa-046", "question": "뢴트겐이 X선을 발견한 날짜", "answer": "1895년 11월 8일", "kind": "normal"}
+{"id": "qa-0137", "passage": "pa-046", "question": "X선으로 찍은 첫 인체 사진의 주인공은 누구의 손이었어?", "answer": "아내의 손", "kind": "normal"}
+{"id": "qa-0138", "passage": "pa-046", "question": "그는 왜 자기 발견에 특허를 내지 않았을까?", "answer": "모든 사람이 자유롭게 쓸 수 있도록", "kind": "context"}
+{"id": "qa-0139", "passage": "pa-047", "question": "인슐린을 분비하는 세포 이름", "answer": "베타 세포", "kind": "normal"}
+{"id": "qa-0140", "passage": "pa-047", "question": "인슐린 주사로 처음 치료받은 환자는 누구인가요?", "answer": "레너드 톰프슨", "kind": "normal"}
+{"id": "qa-0141", "passage": "pa-047", "question": "단백질 아미노산 서열을 처음 밝혀낸 과학자", "answer": "프레더릭 생어", "kind": "normal"}
+{"id": "qa-0142", "passage": "pa-048", "question": "탄소 연대 측정법을 개발한 미국 과학자", "answer": "윌러드 리비", "kind": "normal"}
+{"id": "qa-0143", "passage": "pa-048", "question": "탄소-14의 반감기는 몇 년이야?", "answer": "약 5,730년", "kind": "normal"}
+{"id": "qa-0144", "passage": "pa-048", "question": "방사성 탄소로 측정 가능한 연대는 최대 몇 년 전까지인가요?", "answer": "대략 6만 년 전까지", "kind": "normal"}
+{"id": "qa-0145", "passage": "pa-049", "question": "오존층은 지상에서 몇 킬로미터 높이에 있어?", "answer": "약 15~35킬로미터", "kind": "normal"}
+{"id": "qa-0146", "passage": "pa-049", "question": "남극 오존 구멍이 처음 발견된 해", "answer": "1985년", "kind": "normal"}
+{"id": "qa-0147", "passage": "pa-049", "question": "CFC 사용을 규제한 국제 협약 이름은?", "answer": "몬트리올 의정서", "kind": "normal"}
+{"id": "qa-0148", "passage": "pa-050", "question": "러더퍼드 밑에서 금박 실험을 한 두 사람", "answer": "한스 가이거와 어니스트 마스든", "kind": "normal"}
+{"id": "qa-0149", "passage": "pa-050", "question": "러더퍼드가 원자핵 모형을 제안한 해는 언제인가요?", "answer": "1911년", "kind": "normal"}
+{"id": "qa-0150", "passage": "pa-051", "question": "아인슈타인이 일반 상대성 이론을 완성한 연도", "answer": "1915년", "kind": "normal"}
+{"id": "qa-0151", "passage": "pa-051", "question": "1919년 일식을 관측해 상대성 이론을 입증한 천문학자는?", "answer": "아서 에딩턴", "kind": "normal"}
+{"id": "qa-0152", "passage": "pa-051", "question": "중력파는 몇 년에 처음 검출됐어?", "answer": "2015년", "kind": "normal"}
+{"id": "qa-0153", "passage": "pa-052", "question": "프린키피아는 어느 언어로 쓰였나요?", "answer": "라틴어", "kind": "normal"}
+{"id": "qa-0154", "passage": "pa-052", "question": "뉴턴 프린키피아 출판비를 부담한 천문학자", "answer": "에드먼드 핼리", "kind": "normal"}
+{"id": "qa-0155", "passage": "pa-053", "question": "누리호 1단에 달린 엔진은 몇 기야?", "answer": "네 기", "kind": "normal"}
+{"id": "qa-0156", "passage": "pa-053", "question": "누리호가 처음으로 위성을 궤도에 올린 날", "answer": "2022년 6월 21일", "kind": "normal"}
+{"id": "qa-0157", "passage": "pa-053", "question": "누리호", "answer": "누리호", "kind": "short"}
+{"id": "qa-0158", "passage": "pa-054", "question": "에베레스트산 공식 높이는 몇 미터인가요?", "answer": "8,848.86미터", "kind": "normal"}
+{"id": "qa-0159", "passage": "pa-054", "question": "한국인 최초 에베레스트 등정자", "answer": "고상돈", "kind": "normal"}
+{"id": "qa-0160", "passage": "pa-054", "question": "티베트 사람들은 에베레스트를 뭐라고 불러?", "answer": "초모룽마", "kind": "normal"}
+{"id": "qa-0161", "passage": "pa-055", "question": "바이칼호에서 가장 깊은 곳 수심", "answer": "1,642미터", "kind": "normal"}
+{"id": "qa-0162", "passage": "pa-055", "question": "바이칼호 물이 빠져나가는 유일한 강은?", "answer": "앙가라강", "kind": "normal"}
+{"id": "qa-0163", "passage": "pa-056", "question": "사해 물의 염분은 몇 퍼센트야?", "answer": "약 34퍼센트", "kind": "normal"}
+{"id": "qa-0164", "passage": "pa-056", "question": "사해로 흘러드는 강 이름", "answer": "요르단강", "kind": "normal"}
+{"id": "qa-0165", "passage": "pa-056", "question": "사해 근처 동굴에서 고대 두루마리가 나온 연도는?", "answer": "1947년", "kind": "normal"}
+{"id": "qa-0166", "passage": "pa-057", "question": "아마존강은 어디에서 발원하나요?", "answer": "페루 안데스산맥의 네바도 미스미산 일대", "kind": "normal"}
+{"id": "qa-0167", "passage": "pa-057", "question": "아마존강을 거슬러 오르는 조석 해일을 뭐라고 해?", "answer": "포로로카", "kind": "normal"}
+{"id": "qa-0168", "passage": "pa-058", "question": "청나일 발원지", "answer": "에티오피아의 타나호", "kind": "normal"}
+{"id": "qa-0169", "passage": "pa-058", "question": "백나일과 청나일이 합쳐지는 도시는 어디인가요?", "answer": "하르툼", "kind": "normal"}
+{"id": "qa-0170", "passage": "pa-058", "question": "나일강 범람을 멈추게 한 댐이 완공된 해", "answer": "1970년", "kind": "normal"}
+{"id": "qa-0171", "passage": "pa-059", "question": "사하라 사막 넓이는 얼마나 돼?", "answer": "약 940만 제곱킬로미터", "kind": "normal"}
+{"id": "qa-0172", "passage": "pa-059", "question": "사하라에서 제일 높은 산 이름", "answer": "에미쿠시산", "kind": "normal"}
+{"id": "qa-0173", "passage": "pa-060", "question": "챌린저 해연 수심", "answer": "약 10,984미터", "kind": "normal"}
+{"id": "qa-0174", "passage": "pa-060", "question": "마리아나 해구 바닥에 처음 도달한 잠수정은?", "answer": "트리에스테호", "kind": "normal"}
+{"id": "qa-0175", "passage": "pa-060", "question": "이 글에서 설명한 해구는 어떻게 생겨났다고 하나요?", "answer": "마리아나판 아래로 파고들면서", "kind": "context"}
+{"id": "qa-0176", "passage": "pa-061", "question": "그랜드 캐니언을 깎아 만든 강 이름", "answer": "콜로라도강", "kind": "normal"}
+{"id": "qa-0177", "passage": "pa-061", "question": "그랜드캐니언이 국립공원으로 지정된 해는?", "answer": "1919년", "kind": "normal"}
+{"id": "qa-0178", "passage": "pa-062", "question": "오스트레일리아 어느 주 앞바다에 그레이트 배리어 리프가 있어?", "answer": "퀸즐랜드주", "kind": "normal"}
+{"id": "qa-0179", "passage": "pa-062", "question": "그레이트배리어리프에 지금 이름을 붙인 탐험가", "answer": "매슈 플린더스", "kind": "normal"}
+{"id": "qa-0180", "passage": "pa-063", "question": "파나마 운하는 언제 처음 열렸나요?", "answer": "1914년 8월 15일", "kind": "normal"}
+{"id": "qa-0181", "passage": "pa-063", "question": "파나마 운하 중간에 있는 인공 호수", "answer": "가툰호", "kind": "normal"}
+{"id": "qa-0182", "passage": "pa-063", "question": "이것은 어느 두 바다를 이어 주나요?", "answer": "대서양과 태평양", "kind": "context"}
+{"id": "qa-0183", "passage": "pa-064", "question": "수에즈 운하 개통일", "answer": "1869년 11월 17일", "kind": "normal"}
+{"id": "qa-0184", "passage": "pa-064", "question": "수에즈 운하를 국유화한 이집트 대통령은 누구야?", "answer": "가말 압델 나세르", "kind": "normal"}
+{"id": "qa-0185", "passage": "pa-064", "question": "수에즈 운하에는 왜 갑문이 필요 없지?", "answer": "두 바다의 수면 높이가 거의 같아", "kind": "normal"}
+{"id": "qa-0186", "passage": "pa-065", "question": "빅토리아 폭포 높이는 몇 미터인가요?", "answer": "108미터", "kind": "normal"}
+{"id": "qa-0187", "passage": "pa-065", "question": "모시오아툰야는 무슨 뜻이야?", "answer": "천둥 치는 연기", "kind": "normal"}
+{"id": "qa-0188", "passage": "pa-065", "question": "빅토리아 폭포에 영국 여왕 이름을 붙인 탐험가", "answer": "데이비드 리빙스턴", "kind": "normal"}
+{"id": "qa-0189", "passage": "pa-066", "question": "갈라파고스 제도는 어느 나라에 속해 있어?", "answer": "에콰도르", "kind": "normal"}
+{"id": "qa-0190", "passage": "pa-066", "question": "다윈이 비글호를 타고 갈라파고스에 도착한 날", "answer": "1835년 9월 15일", "kind": "normal"}
+{"id": "qa-0191", "passage": "pa-066", "question": "갈라파고스라는 이름은 무엇을 뜻하는 말에서 나왔나요?", "answer": "안장을 뜻하는 옛 에스파냐어", "kind": "normal"}
+{"id": "qa-0192", "passage": "pa-067", "question": "킬리만자로 정상 해발 높이", "answer": "해발 5,895미터", "kind": "normal"}
+{"id": "qa-0193", "passage": "pa-067", "question": "킬리만자로를 처음 등정한 독일 지리학자는?", "answer": "한스 마이어", "kind": "normal"}
+{"id": "qa-0194", "passage": "pa-068", "question": "우유니 소금사막 해발 고도는 얼마야?", "answer": "해발 약 3,660미터", "kind": "normal"}
+{"id": "qa-0195", "passage": "pa-068", "question": "우유니가 거울처럼 하늘을 비추는 시기", "answer": "12월부터 3월 사이", "kind": "normal"}
+{"id": "qa-0196", "passage": "pa-068", "question": "해당 문서에서 소금층이 가장 두꺼운 곳은 몇 미터라고 했어?", "answer": "120미터", "kind": "context"}
+{"id": "qa-0197", "passage": "pa-069", "question": "한국의 갯벌이 세계유산에 오른 날짜는?", "answer": "2021년 7월 26일", "kind": "normal"}
+{"id": "qa-0198", "passage": "pa-069", "question": "세계유산 한국의 갯벌에 포함된 네 지역", "answer": "서천 갯벌, 고창 갯벌, 신안 갯벌, 보성-순천 갯벌", "kind": "normal"}
+{"id": "qa-0199", "passage": "pa-070", "question": "카스피해를 둘러싼 나라는 모두 몇 개국이야?", "answer": "다섯 나라", "kind": "normal"}
+{"id": "qa-0200", "passage": "pa-070", "question": "카스피해로 가장 많은 물이 흘러드는 강은?", "answer": "볼가강", "kind": "normal"}
+{"id": "qa-0201", "passage": "pa-070", "question": "카스피해", "answer": "카스피해", "kind": "short"}
+{"id": "qa-0202", "passage": "pa-071", "question": "태양계 전체 질량 가운데 태양이 차지하는 비율", "answer": "99.86퍼센트", "kind": "normal"}
+{"id": "qa-0203", "passage": "pa-071", "question": "금성 지표면의 기압은 지구와 비교하면 몇 배 정도야?", "answer": "약 95배", "kind": "normal"}
+{"id": "qa-0204", "passage": "pa-071", "question": "화성과 목성 사이 소행성대에서 가장 큰 천체는?", "answer": "세레스", "kind": "normal"}
+{"id": "qa-0205", "passage": "pa-071", "question": "천왕성을 처음 찾아낸 천문학자는 누구인가요?", "answer": "윌리엄 허셜", "kind": "normal"}
+{"id": "qa-0206", "passage": "pa-071", "question": "명왕성이 행성에서 왜행성으로 바뀐 해", "answer": "2006년", "kind": "normal"}
+{"id": "qa-0207", "passage": "pa-072", "question": "임진왜란 첫날 부산진성을 지키다 숨진 장수", "answer": "정발", "kind": "normal"}
+{"id": "qa-0208", "passage": "pa-072", "question": "선조가 피란해서 마지막으로 머문 곳은 어디였나요?", "answer": "의주", "kind": "normal"}
+{"id": "qa-0209", "passage": "pa-072", "question": "한산도 대첩에서 이순신이 펼친 진법 이름", "answer": "학익진", "kind": "normal"}
+{"id": "qa-0210", "passage": "pa-072", "question": "행주산성 전투를 승리로 이끈 조선 장수는?", "answer": "권율", "kind": "normal"}
+{"id": "qa-0211", "passage": "pa-072", "question": "명량 해전 때 이순신에게 남은 배는 몇 척이었어?", "answer": "13척", "kind": "normal"}
+{"id": "qa-0212", "passage": "pa-073", "question": "한반도의 남북 길이는 얼마나 되나요?", "answer": "약 1,000킬로미터", "kind": "normal"}
+{"id": "qa-0213", "passage": "pa-073", "question": "태백산맥 최고봉", "answer": "설악산의 대청봉", "kind": "normal"}
+{"id": "qa-0214", "passage": "pa-073", "question": "남한에서 가장 긴 강은?", "answer": "낙동강", "kind": "normal"}
+{"id": "qa-0215", "passage": "pa-073", "question": "황해 평균 수심은 몇 미터야?", "answer": "약 45미터", "kind": "normal"}
+{"id": "qa-0216", "passage": "pa-073", "question": "한탄강 일대가 유네스코 세계지질공원이 된 시기", "answer": "2020년 7월", "kind": "normal"}
+{"id": "qa-0217", "passage": "pa-074", "question": "공기 중 산소는 몇 퍼센트를 차지해?", "answer": "20.946퍼센트", "kind": "normal"}
+{"id": "qa-0218", "passage": "pa-074", "question": "대류권에서 1킬로미터 올라갈 때마다 기온은 얼마나 떨어지나요?", "answer": "평균 6.4도 정도", "kind": "normal"}
+{"id": "qa-0219", "passage": "pa-074", "question": "성층권 오존 농도가 최대인 높이", "answer": "약 20~25킬로미터", "kind": "normal"}
+{"id": "qa-0220", "passage": "pa-074", "question": "별똥별이 불타 사라지는 대기층은 어디야?", "answer": "중간권", "kind": "normal"}
+{"id": "qa-0221", "passage": "pa-074", "question": "우주가 시작되는 경계인 카르만 선은 몇 킬로미터 높이에 있나요?", "answer": "100킬로미터", "kind": "normal"}
+{"id": "qa-0222", "passage": "pa-075", "question": "산업 혁명이라는 말을 용어로 굳힌 영국 경제사학자", "answer": "아널드 토인비", "kind": "normal"}
+{"id": "qa-0223", "passage": "pa-075", "question": "수력 방적기를 만들어 특허를 받은 사람은 누구야?", "answer": "리처드 아크라이트", "kind": "normal"}
+{"id": "qa-0224", "passage": "pa-075", "question": "와트의 개량으로 증기기관 연료 소비는 얼마나 줄었나요?", "answer": "뉴커먼 기관의 4분의 1 이하", "kind": "normal"}
+{"id": "qa-0225", "passage": "pa-075", "question": "코크스로 철광석을 처음 녹인 곳", "answer": "콜브룩데일", "kind": "normal"}
+{"id": "qa-0226", "passage": "pa-075", "question": "리버풀과 맨체스터를 잇는 철도가 문을 연 날짜는?", "answer": "1830년 9월 15일", "kind": "normal"}

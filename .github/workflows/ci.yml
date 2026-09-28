@@ -1,0 +1,52 @@
+# 확인: 올릴 때마다 Windows · macOS · Linux에서 설치 → 검사 · 테스트 → 실행과 종료, 그리고 화면 빌드(층 규칙 · 타입 검사).
+# 내장 모델을 올려 보는 확인은 모델 파일(약 2.1GB)을 받으므로 따로 된 작업(models.yml)에서 손으로 돌린다.
+name: 확인
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 테스트 · 실행과 종료 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: 설치
+        run: uv sync --locked
+      - name: 검사 (ruff)
+        run: uv run ruff check .
+      - name: 테스트
+        run: uv run pytest -q
+      - name: 실행과 종료
+        run: uv run python scripts/launch_check.py
+
+  web:
+    name: 화면 빌드
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: 설치
+        run: pnpm --dir web install --frozen-lockfile
+      - name: 층 규칙 · 타입 검사 · 빌드
+        run: pnpm --dir web build

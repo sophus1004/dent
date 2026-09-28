@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DENT</title>
+<!-- 탭 아이콘: 사이드바의 막대 세 개 로고(DentLogo.vue와 같은 그림). 파일로 두지 않아 /favicon.ico를 찾다 404가 나지 않는다. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3' y='5' width='18' height='3.4' rx='1.7' fill='%237c5ce6'/%3E%3Crect x='3' y='10.3' width='11' height='3.4' rx='1.7' fill='%23e3a52a'/%3E%3Crect x='3' y='15.6' width='15' height='3.4' rx='1.7' fill='%2317a596'/%3E%3C/svg%3E">
+<script>
+  // 저장해 둔 테마를 첫 화면을 그리기 전에 적용한다. 그래야 어두운 테마에서 밝게 번쩍이지 않는다.
+  // 저장한 것이 없거나 '시스템'이면 운영체제 설정을 따른다. 규칙은 src/system/theme.ts와 같다.
+  var savedTheme = null;
+  try { savedTheme = localStorage.getItem('dent-theme'); } catch (error) { /* 시스템 설정을 따른다 */ }
+  var isSystemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  var isDark = savedTheme === 'dark' || (savedTheme !== 'light' && isSystemDark);
+  document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+</script>
+</head>
+<body>
+<div id="app"></div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>

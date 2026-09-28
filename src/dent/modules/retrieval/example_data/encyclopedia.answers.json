@@ -1,0 +1,75 @@
+{
+  "key": "encyclopedia",
+  "rows": 153,
+  "planted": [
+    {
+      "name": "긴 문서",
+      "count": 25,
+      "unit": "문서"
+    },
+    {
+      "name": "반복 꼬리말",
+      "count": 84,
+      "unit": "문서"
+    },
+    {
+      "name": "반복 머리 문장",
+      "count": 42,
+      "unit": "문서"
+    },
+    {
+      "name": "깨진 글자",
+      "count": 3,
+      "unit": "문서"
+    },
+    {
+      "name": "떼면 같아지는 문서",
+      "count": 5,
+      "unit": "쌍"
+    },
+    {
+      "name": "똑같은 줄",
+      "count": 3,
+      "unit": "줄"
+    },
+    {
+      "name": "목차 · 표",
+      "count": 5,
+      "unit": "문서"
+    }
+  ],
+  "checks": {
+    "documents": 150,
+    "merged": 3,
+    "long": 25,
+    "broken": 3,
+    "pick": 5,
+    "footer_documents": 84,
+    "lead_documents": 42,
+    "url_documents": 10,
+    "duplicate_pairs": 5
+  },
+  "details": {
+    "footer": "출처: 달라 백과 편집부 · 문의 editor@example.com\nⓒ 달라 백과, 무단 전재 및 재배포 금지",
+    "lead": "이 문서는 달라 백과 2026년판에 실린 글이다.",
+    "url": "자세히 보기: https://example.com/wiki/{number}",
+    "pairs": [
+      "short-001",
+      "short-042",
+      "short-052",
+      "short-094",
+      "short-104"
+    ],
+    "broken": [
+      "short-005",
+      "short-028",
+      "short-061"
+    ],
+    "exact": [
+      "short-096",
+      "short-108",
+      "short-115"
+    ],
+    "plain_documents": 56
+  }
+}

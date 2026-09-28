@@ -1,0 +1,299 @@
+/*
+ * 화면 전체의 색·글자 크기·기본 모양을
+ * shadcn-vue 변수 이름으로 둔다. 밝은 값은 :root, 어두운 값은 [data-theme="dark"]에 둔다.
+ * <html data-theme>은 theme.ts와 index.html이 늘 light나 dark로 채운다(시스템 설정도 풀어서 넣는다).
+ *
+ * 색은 세 가지만 쓴다.
+ *   강조(보라): 주 버튼·선택·포커스에만
+ *   상태(초록·호박·빨강): 등급 아이콘과 글자에만
+ *   나머지: 회색. 라벨 칩도 색 없이 글자 + 1px 테두리. 막대(진행률·분포)는 푸른 회색 한 가지(--chart-bar)
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* dark: 어두운 테마일 때 */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/* rail: 사이드바를 아이콘 줄로 접는 폭 (system/layout/rail.ts와 같은 경계, 기본 글꼴에서 1180px) */
+@custom-variant rail (@media (max-width: 73.75rem));
+
+:root {
+  color-scheme: light;
+  --radius: 0.625rem;
+  --background: #f6f6f8;
+  --foreground: #111118;
+  --card: #ffffff;
+  --card-foreground: #111118;
+  --popover: #ffffff;
+  --popover-foreground: #111118;
+  --muted: #f2f2f5;
+  --muted-foreground: #5f5f6c;
+  /* 더 옅은 글자: 0, —, 예정 같은 비어 있는 값 */
+  --subtle-foreground: #8a8a97;
+  --border: #e5e5ea;
+  --border-strong: #d5d5dc;
+  --input: #d5d5dc;
+  --ring: #7760f2;
+  --primary: #5b43df;
+  --primary-hover: #4f37d1;
+  --primary-foreground: #ffffff;
+  --secondary: #f2f2f5;
+  --secondary-foreground: #111118;
+  --accent: #f0edfe;
+  --accent-foreground: #3d2aae;
+  --destructive: #d63a3a;
+  /* 등급: 아이콘 색 · 글자 색(-ink) */
+  --success: #1f9d55;
+  --success-ink: #16733f;
+  --warning: #d98a0b;
+  --warning-ink: #93570a;
+  --danger: #dc3b3b;
+  --danger-ink: #b42525;
+  --sidebar: #f2f2f5;
+  --sidebar-accent: #e7e7ed;
+  /* 막대(진행률 · 분포)의 한 가지 색. 푸른 회색 */
+  --chart-bar: #6b7894;
+  /* 차트의 눈금선 · 축선 */
+  --grid: #eeeef2;
+  --axis: #d2d2da;
+  /* 툴팁 바탕 */
+  --inverse: #17171d;
+  --inverse-foreground: #f4f4f7;
+  --shadow-xs: 0 1px 2px rgba(17, 17, 24, 0.05);
+  --shadow-card: 0 1px 2px rgba(17, 17, 24, 0.04);
+  --shadow-pop: 0 10px 38px -10px rgba(17, 17, 24, 0.22), 0 6px 16px -8px rgba(17, 17, 24, 0.14);
+  /* 오른쪽에서 열리는 패널의 왼쪽 그림자 */
+  --shadow-panel: -12px 0 32px -18px rgba(17, 17, 24, 0.28);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #0c0c0f;
+  --foreground: #ececf1;
+  --card: #131317;
+  --card-foreground: #ececf1;
+  --popover: #1a1a1f;
+  --popover-foreground: #ececf1;
+  --muted: #1c1c22;
+  --muted-foreground: #a3a3af;
+  --subtle-foreground: #75757f;
+  --border: #25252c;
+  --border-strong: #33333c;
+  --input: #37373f;
+  --ring: #8b76ff;
+  --primary: #6c55ee;
+  --primary-hover: #7a64f5;
+  --primary-foreground: #ffffff;
+  --secondary: #1c1c22;
+  --secondary-foreground: #ececf1;
+  --accent: #1f1a36;
+  --accent-foreground: #cbc0ff;
+  --destructive: #ef5454;
+  --success: #34b86c;
+  --success-ink: #6ad597;
+  --warning: #e8a21f;
+  --warning-ink: #f1bd55;
+  --danger: #ef5454;
+  --danger-ink: #f58d8d;
+  --sidebar: #0f0f13;
+  --sidebar-accent: #1c1c23;
+  --chart-bar: #8491ad;
+  --grid: #1f1f26;
+  --axis: #34343e;
+  --inverse: #ececf1;
+  --inverse-foreground: #131317;
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 16px 40px -12px rgba(0, 0, 0, 0.75), 0 4px 12px -6px rgba(0, 0, 0, 0.5);
+  --shadow-panel: -14px 0 36px -16px rgba(0, 0, 0, 0.8);
+}
+
+@theme inline {
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, "Apple SD Gothic Neo", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* 글자 크기 7단계. caps는 구획 이름·단축키에만 */
+  --text-caps: 11px;
+  --text-caps--line-height: 16px;
+  --text-meta: 12px;
+  --text-meta--line-height: 16px;
+  --text-ui: 13px;
+  --text-ui--line-height: 20px;
+  --text-body: 14px;
+  --text-body--line-height: 22px;
+  --text-title: 16px;
+  --text-title--line-height: 24px;
+  --text-verdict: 24px;
+  --text-verdict--line-height: 32px;
+  --text-kpi: 28px;
+  --text-kpi--line-height: 32px;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-success-ink: var(--success-ink);
+  --color-warning: var(--warning);
+  --color-warning-ink: var(--warning-ink);
+  --color-danger: var(--danger);
+  --color-danger-ink: var(--danger-ink);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-chart-bar: var(--chart-bar);
+  --color-grid: var(--grid);
+  --color-axis: var(--axis);
+  --color-inverse: var(--inverse);
+  --color-inverse-foreground: var(--inverse-foreground);
+
+  --radius-sm: calc(var(--radius) - 5px);
+  --radius-md: calc(var(--radius) - 3px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 2px);
+}
+
+/* 화면 본문의 폭과 여백. 상단 바 아래에 둔다 */
+@utility page {
+  @apply mx-auto w-full max-w-[1200px] px-5 py-7 md:px-8;
+}
+
+/* 카드: 흰 바탕 + 얇은 테두리 + 옅은 그림자 */
+@utility card {
+  background: var(--card);
+  color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+
+/* 구획 이름(작은 대문자식). 11px 글자는 이것과 단축키뿐 */
+@utility caps {
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: var(--muted-foreground);
+}
+
+/* 이름 옆의 작은 건수. 예: 탭 '데이터 127,600' */
+@utility count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+
+/* 고르기 칸. 고르면 보라 바탕에 흰 체크, 일부만 고르면(모두 고르기 칸) 흰 가로줄 */
+@utility checkbox {
+  appearance: none;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--input);
+  border-radius: 4.5px;
+  background: var(--card) center / 12px 12px no-repeat;
+  box-shadow: var(--shadow-xs);
+  vertical-align: middle;
+  cursor: pointer;
+  &:checked {
+    border-color: var(--primary);
+    background-color: var(--primary);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-6.5'/%3E%3C/svg%3E");
+  }
+  &:indeterminate {
+    border-color: var(--primary);
+    background-color: var(--primary);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M4 8h8'/%3E%3C/svg%3E");
+  }
+  &:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  &:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+}
+
+/* 단축키 글쇠. 예: ⌘K, esc */
+@utility kbd {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--muted-foreground);
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--border-strong), 0 1px 0 var(--border-strong);
+}
+
+@layer base {
+  *, ::before, ::after {
+    border-color: var(--border);
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 22px;
+    /* 한국어는 낱말 단위로 줄을 바꾼다 */
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 22%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

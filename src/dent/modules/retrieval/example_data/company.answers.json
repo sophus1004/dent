@@ -1,0 +1,27 @@
+{
+  "key": "company",
+  "rows": 60,
+  "planted": [
+    {
+      "name": "반복 서명",
+      "count": 30,
+      "unit": "문서"
+    },
+    {
+      "name": "반복 안내 문장",
+      "count": 30,
+      "unit": "문서"
+    },
+    {
+      "name": "긴 문서",
+      "count": 22,
+      "unit": "문서"
+    }
+  ],
+  "checks": {
+    "documents": 60,
+    "long": 22,
+    "signature_documents": 30,
+    "footer_documents": 30
+  }
+}

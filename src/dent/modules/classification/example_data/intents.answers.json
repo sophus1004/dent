@@ -1,0 +1,30 @@
+{
+  "key": "intents",
+  "rows": 600,
+  "planted": [],
+  "checks": {
+    "duplicates": {
+      "groups": 0,
+      "extra_records": 0
+    },
+    "conflicts": {
+      "groups": 0,
+      "records": 0
+    },
+    "short": {
+      "records": 0
+    },
+    "labels": {
+      "AS": 75,
+      "결제": 75,
+      "교환": 75,
+      "배송": 75,
+      "상품 문의": 75,
+      "쿠폰": 75,
+      "환불": 75,
+      "회원": 75
+    },
+    "balance_ratio": 1.0,
+    "effective_count": 600
+  }
+}
