@@ -113,20 +113,27 @@ def topic_transport() -> httpx.MockTransport:
     return httpx.MockTransport(reply)
 
 
+# 가짜 Jev가 '해롭다'고 보는 응답의 표시어 (안전 질문)
+UNSAFE_MARK = "[해로움]"
+
+
 def judge_transport(*, off_topic: str = "엉뚱") -> httpx.MockTransport:
     """가짜 Jev: 응답에 off_topic 낱말이 있으면 '따르지 않음'(예 0.05), 아니면 '따름'(예 0.95).
 
-    거절이 마땅한지는 늘 '예' 0.9로 답한다. 받은 요청은 .requests에.
+    거절이 마땅한지는 늘 '예' 0.9, 해로운지는 응답에 UNSAFE_MARK가 있으면 0.95 · 없으면 0.05로 답한다.
+    받은 요청은 .requests에.
     """
     requests: list[httpx.Request] = []
 
     def reply(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         body = json.loads(request.content)
-        follows = 0.05 if off_topic in body["state"]["response"] else 0.95
+        response = body["state"].get("response", "")
+        follows = 0.05 if off_topic in response else 0.95
+        unsafe = 0.95 if UNSAFE_MARK in response else 0.05
         answers = {}
         for name in body["questions"]:
-            yes = follows if name == "follows" else 0.9
+            yes = {"follows": follows, "unsafe": unsafe}.get(name, 0.9)
             answers[name] = {
                 "type": "choice",
                 "choice": "yes" if yes >= 0.5 else "no",

@@ -9,7 +9,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dent.modules.generation import contamination as contamination_service
 from dent.modules.generation import conversations as conversations_service
+from dent.modules.generation import dataset_settings as settings_service
 from dent.modules.generation import examples as examples_service
 from dent.modules.generation import exporting as exporting_service
 from dent.modules.generation import helper as helper_agent
@@ -47,6 +49,8 @@ from dent.modules.generation.schemas import (
     OverviewRead,
     ProblemFilter,
     ReviewQueueRead,
+    SettingsRead,
+    SettingsUpdate,
 )
 from dent.system import helper as helper_service
 from dent.system.db import get_db
@@ -85,9 +89,28 @@ async def list_datasets(db: Db) -> list[DatasetSummaryRead]:
 async def get_dataset(dataset_id: int, db: Db) -> DatasetRead:
     """생성 데이터셋 하나."""
     summary = await generation_service.get_dataset_summary(db, dataset_id=dataset_id)
+    entry = await generation_service.entry_stage(db, dataset_id=dataset_id)
+    settings = await generation_service.find_settings(db, dataset_id=dataset_id)
     return DatasetRead(
-        **_dataset_summary_read(summary).model_dump(), entry_stage=generation_service.ENTRY_STAGE
+        **_dataset_summary_read(summary).model_dump(),
+        entry_stage=entry,
+        settings=SettingsRead.model_validate(settings),
     )
+
+
+@router.patch("/datasets/{dataset_id}/settings")
+async def update_settings(dataset_id: int, data: SettingsUpdate, db: Db) -> SettingsRead:
+    """데이터셋 설정 고치기(만들 데이터 · 평가셋 · 학습할 모델 · 최대 길이). 바뀌면 다시 재기 · 대조 작업을 넣는다."""
+    settings = await settings_service.update_settings(db, dataset_id=dataset_id, data=data)
+    return SettingsRead.model_validate(settings)
+
+
+@router.post("/datasets/{dataset_id}/contamination", status_code=status.HTTP_202_ACCEPTED)
+async def check_contamination(dataset_id: int, db: Db) -> None:
+    """평가셋과 다시 대조하기(작업을 넣는다). 평가셋이 없거나 자기가 평가셋이면 아무것도 하지 않는다."""
+    await generation_service.get_dataset(db, dataset_id=dataset_id)
+    await contamination_service.queue_check(db, dataset_id=dataset_id)
+    await db.commit()
 
 
 @router.delete("/datasets/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)

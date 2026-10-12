@@ -9,10 +9,19 @@
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dent.modules.generation.models import ANALYSIS_BUILDING_STATUSES, Analysis, Prompt
+from dent.modules.generation.models import (
+    ANALYSIS_BUILDING_STATUSES,
+    DEFAULT_MAX_TOKENS,
+    Analysis,
+    DatasetSettings,
+    Goal,
+    Pair,
+    Prompt,
+    Response,
+)
 from dent.modules.generation.schemas import ImportCreate
 from dent.system import datasets as datasets_service
 from dent.system import imports as imports_service
@@ -25,8 +34,8 @@ MODULE_NAME = "generation"
 
 ANALYZING_MESSAGE = "뜻 분석을 만드는 중입니다. 끝나거나 멈춘 뒤 지워 주세요."
 
-# 흐름의 입구 단계. 첫 판은 응답이 있는 데이터(지시 · 응답)만 받아 2(응답)로 들어온다.
-ENTRY_STAGE = 2
+# 흐름의 입구 단계: 지시만 → 1(지시, 응답 만들기 앞) · 지시 · 응답 → 2(응답) · 선호 쌍 → 3(선호)
+ENTRY_PROMPTS, ENTRY_ANSWERS, ENTRY_PAIRS = 1, 2, 3
 
 # 대화 상태 조건. 휴지통 밖이면 학습에 쓴다(첫 판에는 따로 '학습 제외'를 두지 않는다).
 IS_ACTIVE = Prompt.trashed_at.is_(None)
@@ -34,6 +43,12 @@ IS_TRASHED = Prompt.trashed_at.is_not(None)
 
 # 문제가 남은 대화 (같은 지시는 해시로 세므로 여기 들지 않는다)
 HAS_OPEN_CHECKS = func.jsonb_array_length(Prompt.open_checks) > 0
+
+# 주 응답이 있는 대화 (없으면 지시만: 응답 만들기로 채운다)
+HAS_MAIN_ANSWER = exists().where(Response.prompt_id == Prompt.id, Response.is_main)
+
+# 휴지통 밖 선호 쌍 (지시도 휴지통 밖이어야 한다. 쌍 조건은 Prompt와 이어 쓴다)
+PAIR_IS_ACTIVE = Pair.trashed_at.is_(None)
 
 
 def has_open(key: str) -> ColumnElement[bool]:
@@ -177,3 +192,38 @@ async def _summarize(db: AsyncSession, datasets: list[Dataset]) -> list[DatasetS
             )
         )
     return summaries
+
+
+# ---------- 데이터셋 설정 ----------
+
+
+async def find_settings(db: AsyncSession, *, dataset_id: int) -> DatasetSettings:
+    """데이터셋 설정. 저장한 적이 없으면 기본값(세션에 넣지 않은 새 줄)."""
+    found = await db.get(DatasetSettings, dataset_id)
+    if found is not None:
+        return found
+    return DatasetSettings(
+        dataset_id=dataset_id,
+        goal=await _default_goal(db, dataset_id=dataset_id),
+        is_eval=False,
+        tokenizer_model=None,
+        max_tokens=DEFAULT_MAX_TOKENS,
+    )
+
+
+async def entry_stage(db: AsyncSession, *, dataset_id: int) -> int:
+    """흐름의 입구: 선호 쌍이 있으면 3, 주 응답이 있는 대화가 있으면 2, 지시만이면 1."""
+    has_pairs = await db.scalar(select(exists().where(Pair.dataset_id == dataset_id)))
+    if has_pairs:
+        return ENTRY_PAIRS
+    has_answers = await db.scalar(
+        select(exists().where(Prompt.dataset_id == dataset_id, HAS_MAIN_ANSWER))
+    )
+    has_prompts = await db.scalar(select(exists().where(Prompt.dataset_id == dataset_id)))
+    return ENTRY_ANSWERS if has_answers or not has_prompts else ENTRY_PROMPTS
+
+
+async def _default_goal(db: AsyncSession, *, dataset_id: int) -> str:
+    """설정이 없을 때의 목표: 선호 쌍을 가져왔으면 선호, 아니면 SFT."""
+    has_pairs = await db.scalar(select(exists().where(Pair.dataset_id == dataset_id)))
+    return Goal.PREFERENCE.value if has_pairs else Goal.SFT.value

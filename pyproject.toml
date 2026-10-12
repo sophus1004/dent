@@ -24,9 +24,15 @@ dependencies = [
     "rich>=15.0.0",
     "scikit-learn>=1.9.1",
     "sqlalchemy[asyncio]>=2.0.54",
+    "tokenizers>=0.23.2",
     "umap-learn>=0.5.12",
     "uvicorn[standard]>=0.53.0",
 ]
+
+[tool.uv]
+# 내장 모델이 쓰는 transformers(embedded_models.MODEL_PACKAGES의 5.17)는 huggingface-hub 2.0 미만을 요구한다.
+# tokenizers가 hub 2.x를 끌어오면 모델 서버가 뜨지 않아 잠금 파일에서 막는다.
+constraint-dependencies = ["huggingface-hub>=1.5,<2"]
 
 [project.scripts]
 # 켜는 명령: uv run dent

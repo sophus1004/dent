@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from dent.modules.generation import importing
 from dent.modules.generation import service as generation_service
 from dent.modules.generation.jobs import run_import_job
-from dent.modules.generation.models import Prompt, Response
+from dent.modules.generation.models import Pair, Prompt, Response
 from dent.modules.generation.rules import CheckKey
 from dent.modules.generation.schemas import ImportCreate
 from dent.system import imports as imports_service
@@ -55,9 +55,6 @@ async def test_import_skips_rows_it_cannot_take_with_reasons(db_session):
     # 준비
     rows = [
         {"messages": [{"from": "human", "value": "안녕"}, {"from": "gpt", "value": "안녕하세요."}]},
-        {"messages": [{"role": "user", "content": "지시만 있어요"}]},
-        {"messages": [*conversation("질문", "답입니다."), {"role": "user", "content": "또 질문"}]},
-        {"messages": [{"role": "user", "content": "날씨?"}, {"role": "tool", "content": "{}"}]},
         {"messages": [{"role": "narrator", "content": "…"}]},
         {"messages": "대화가 아님"},
         {"messages": []},
@@ -69,15 +66,144 @@ async def test_import_skips_rows_it_cannot_take_with_reasons(db_session):
     # 확인: 역할 이름(human · gpt)은 맞추고, 넣을 수 없는 줄은 이유와 함께 건너뛴다
     assert finished.rows_added == 1
     assert finished.skipped_lines == [
-        {"line": 2, "reason": "응답 없음(지시만은 다음 판)"},
-        {"line": 3, "reason": "마지막이 응답이 아님"},
-        {"line": 4, "reason": "도구 호출 대화(다음 판)"},
-        {"line": 5, "reason": "알 수 없는 역할"},
-        {"line": 6, "reason": "대화 목록이 아님"},
-        {"line": 7, "reason": "빈 대화"},
+        {"line": 2, "reason": "알 수 없는 역할"},
+        {"line": 3, "reason": "대화 목록이 아님"},
+        {"line": 4, "reason": "빈 대화"},
     ]
     [(prompt, _answer)] = await _conversations(db_session)
     assert prompt.messages == [{"role": "user", "content": "안녕"}]
+
+
+async def test_import_takes_prompts_without_answer(db_session):
+    # 준비: 지시만 · 앞 턴 뒤 지시로 끝남 · 응답 칸이 빈 Alpaca
+    rows = [
+        {"messages": [{"role": "user", "content": "지시만 있어요"}]},
+        {"messages": [*conversation("질문", "답입니다."), {"role": "user", "content": "또 질문"}]},
+    ]
+
+    # 실행
+    finished = await import_file(db_session, jsonl_bytes(rows))
+    prompts = (await db_session.scalars(select(Prompt).order_by(Prompt.id))).all()
+    answers = await db_session.scalar(select(func.count()).select_from(Response))
+
+    # 확인: 건너뛰지 않고 응답 없는 지시로 넣는다(구조 문제도 아니다)
+    assert finished.rows_added == 2
+    assert answers == 0
+    assert prompts[1].messages[-1] == {"role": "user", "content": "또 질문"}
+    assert all(CheckKey.STRUCTURE.value not in prompt.marks for prompt in prompts)
+
+
+async def test_import_reads_tool_calls_in_openai_and_sharegpt_shapes(db_session):
+    # 준비: OpenAI 모양(tool_calls · tool_call_id)과 LLaMA-Factory 모양(function_call · observation)
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    openai = [
+        {"role": "user", "content": "서울 날씨?"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "weather", "arguments": '{"city": "서울"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": '{"temp": 21}'},
+        {"role": "assistant", "content": "서울은 21도입니다."},
+    ]
+    sharegpt = [
+        {"from": "human", "value": "부산 날씨?"},
+        {"from": "function_call", "value": '{"name": "weather", "arguments": {"town": "부산"}}'},
+        {"from": "observation", "value": '{"temp": 24}'},
+        {"from": "gpt", "value": "부산은 24도입니다."},
+    ]
+    rows = [{"messages": openai, "tools": tools}, {"messages": sharegpt, "tools": tools}]
+
+    # 실행
+    finished = await import_file(
+        db_session,
+        jsonl_bytes(rows),
+        mapping={"shape": "messages", "messages": "messages", "tools": "tools"},
+    )
+    loaded = await _conversations(db_session)
+
+    # 확인: 둘 다 같은 모양(tool_calls · tool)으로 맞추고, 인자 스키마가 틀린 둘째만 도구 호출 형식 문제다
+    assert finished.rows_added == 2
+    (first, _), (second, _) = loaded
+    assert first.tools == tools
+    assert second.messages[1]["tool_calls"][0]["function"]["name"] == "weather"
+    assert second.messages[2] == {
+        "role": "tool",
+        "content": '{"temp": 24}',
+        "tool_call_id": "call_1",
+    }
+    assert CheckKey.TOOL_CALL.value not in first.marks
+    assert CheckKey.TOOL_CALL.value in second.marks
+
+
+async def test_import_preference_and_pairwise_make_pairs(db_session):
+    # 준비: TRL 선호(지시 칸 없이 chosen의 앞 메시지가 지시) · HelpSteer3 모양(점수 양수면 2가 낫다)
+    preference = [
+        {
+            "chosen": [
+                {"role": "user", "content": "요약해 줘"},
+                {"role": "assistant", "content": "핵심만 세 줄입니다."},
+            ],
+            "rejected": [
+                {"role": "user", "content": "요약해 줘"},
+                {"role": "assistant", "content": "모르겠어요."},
+            ],
+        }
+    ]
+    pairwise = [
+        {
+            "context": "인사해 줘",
+            "response1": "음.",
+            "response2": "안녕하세요!",
+            "overall_preference": 2,
+        }
+    ]
+
+    # 실행
+    await import_file(
+        db_session,
+        jsonl_bytes(preference),
+        mapping={"shape": "preference", "chosen": "chosen", "rejected": "rejected"},
+    )
+    await import_file(
+        db_session,
+        jsonl_bytes(pairwise),
+        name="짝 점수",
+        mapping={
+            "shape": "pairwise",
+            "prompt": "context",
+            "response1": "response1",
+            "response2": "response2",
+            "preference": "overall_preference",
+        },
+    )
+    pairs = (await db_session.scalars(select(Pair).order_by(Pair.id))).all()
+    responses = {r.id: r for r in (await db_session.scalars(select(Response))).all()}
+
+    # 확인: 쌍마다 응답 둘(고른 쪽이 주 응답)
+    assert [responses[p.chosen_id].content for p in pairs] == ["핵심만 세 줄입니다.", "안녕하세요!"]
+    assert [responses[p.rejected_id].content for p in pairs] == ["모르겠어요.", "음."]
+    assert all(
+        responses[p.chosen_id].is_main and not responses[p.rejected_id].is_main for p in pairs
+    )
 
 
 async def test_import_alpaca_joins_instruction_and_input_with_system(db_session):

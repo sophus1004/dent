@@ -93,7 +93,7 @@ async def test_create_import_returns_422_when_shape_columns_are_missing(client):
             "new_dataset_name": "빠진 칸",
             "source": "file",
             "upload_id": "0" * 32,
-            "mapping": {"shape": "alpaca", "instruction": "instruction"},
+            "mapping": {"shape": "alpaca", "output": "output"},
         },
     )
 

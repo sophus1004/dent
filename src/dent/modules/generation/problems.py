@@ -4,6 +4,9 @@
 - 같은 지시: 같은 맥락 해시 무리에서 번호가 가장 작은 것을 남긴 나머지(여분).
 - 근접 중복: 다 만든 뜻 분석의 근접 중복 쌍에서, 번호가 더 작은 짝이 휴지통 밖에 있는 대화(여분).
 - 지시 불일치: 다 만든 뜻 분석에서 Jev가 '따르지 않음'을 확인한 대화. 까닭이 다른 검사로 이미 드러난 대화는 뺀다.
+  Jev가 애매하게 본 것(따름 0.2~0.5)은 '의심'이라 진단에 세지 않고 도우미의 LLM이 한 번 더 본다.
+- 응답 없음: 주 응답이 없는 대화(지시만). 오염: 평가셋과 겹친 대화. 안전: Jev가 해롭다고 본 응답.
+- 3 선호(쌍 번호): 같은 쌍 · 동점(쌍 표시), 판정 반대 · 작은 마진(Jev가 두 응답을 따로 본 따름 점수).
 모두 휴지통 밖만 보고, 사람이 '그대로 두기'로 둔 검사는 뺀다. 번호 순.
 """
 
@@ -17,12 +20,29 @@ from dent.modules.generation import judging
 from dent.modules.generation.models import (
     Analysis,
     AnalysisStatus,
+    Contamination,
     Judgment,
     NearDuplicate,
+    Pair,
     Prompt,
 )
-from dent.modules.generation.rules import CheckKey
-from dent.modules.generation.service import HAS_OPEN_CHECKS, IS_ACTIVE, has_open
+from dent.modules.generation.rules import CHECKS, CheckKey
+from dent.modules.generation.service import (
+    HAS_MAIN_ANSWER,
+    HAS_OPEN_CHECKS,
+    IS_ACTIVE,
+    PAIR_IS_ACTIVE,
+    has_open,
+)
+
+# 지시 불일치 의심: Jev 따름이 확인 경계(0.2) 위 · 이 값 이하. 진단에 세지 않고 도우미의 LLM이 본다.
+MISMATCH_SUSPECT_FOLLOWS = 0.5
+
+# 작은 마진: 두 응답의 Jev 따름 점수 차이가 이보다 작으면 두 응답이 비슷하다(배울 신호가 약하다)
+SMALL_MARGIN = 0.1
+
+# 판정 반대: 버린 응답의 따름 점수가 고른 응답보다 이만큼 이상 높으면 라벨이 뒤집혔을 수 있다
+REVERSED_MARGIN = 0.3
 
 # 지시를 따르지 않는 까닭이 이 검사들로 이미 드러난 대화(빈 지시 · 거절 · 짧은 · 빈 · 잘린 응답 …)는 지시 불일치로 세지 않는다.
 # 한 문제를 두 검사가 두 번 고치지 않게 하고, 사람이 '그대로 두기'로 둔 거절이 지시 불일치로 다시 뜨지 않게 한다.
@@ -105,6 +125,105 @@ def mismatch_ids(dataset_id: int, analysis_id: int) -> Select[tuple[int]]:
     )
 
 
+def mismatch_suspect_ids(dataset_id: int, analysis_id: int) -> Select[tuple[int]]:
+    """Jev가 애매하게 본 지시 불일치 의심 대화 번호들 (따름 0.2 초과 · 0.5 이하, 까닭이 드러난 대화 뺌)."""
+    return (
+        select(Prompt.id)
+        .join(
+            Judgment,
+            and_(Judgment.prompt_id == Prompt.id, Judgment.analysis_id == analysis_id),
+        )
+        .where(
+            Prompt.dataset_id == dataset_id,
+            IS_ACTIVE,
+            not_(is_kept(CheckKey.MISMATCH)),
+            Judgment.follows > 1 - judging.CONFIRM_PROBABILITY,
+            Judgment.follows <= MISMATCH_SUSPECT_FOLLOWS,
+            not_(or_(*(Prompt.marks.has_key(key.value) for key in EXPLAINED_MISMATCH))),
+        )
+        .order_by(Prompt.id)
+    )
+
+
+def unsafe_ids(dataset_id: int, analysis_id: int) -> Select[tuple[int]]:
+    """Jev가 해롭다고 본(≥ 0.8) 응답의 대화 번호들."""
+    return (
+        select(Prompt.id)
+        .join(
+            Judgment,
+            and_(Judgment.prompt_id == Prompt.id, Judgment.analysis_id == analysis_id),
+        )
+        .where(
+            Prompt.dataset_id == dataset_id,
+            IS_ACTIVE,
+            not_(is_kept(CheckKey.UNSAFE)),
+            Judgment.unsafe >= judging.CONFIRM_PROBABILITY,
+        )
+        .order_by(Prompt.id)
+    )
+
+
+def no_answer_ids(dataset_id: int) -> Select[tuple[int]]:
+    """주 응답이 없는 대화(지시만) 번호들."""
+    return (
+        select(Prompt.id)
+        .where(
+            Prompt.dataset_id == dataset_id,
+            IS_ACTIVE,
+            not_(HAS_MAIN_ANSWER),
+            not_(is_kept(CheckKey.NO_ANSWER)),
+        )
+        .order_by(Prompt.id)
+    )
+
+
+def contamination_ids(dataset_id: int) -> Select[tuple[int]]:
+    """평가셋과 겹친 대화 번호들 (마지막 대조의 결과)."""
+    return (
+        select(Prompt.id)
+        .join(Contamination, Contamination.prompt_id == Prompt.id)
+        .where(
+            Prompt.dataset_id == dataset_id,
+            IS_ACTIVE,
+            not_(is_kept(CheckKey.CONTAMINATION)),
+        )
+        .order_by(Prompt.id)
+    )
+
+
+# ---------- 선호 쌍 ----------
+
+
+def active_pairs(dataset_id: int) -> Select[tuple[int]]:
+    """휴지통 밖 선호 쌍 번호들 (지시도 휴지통 밖)."""
+    return (
+        select(Pair.id)
+        .join(Prompt, Prompt.id == Pair.prompt_id)
+        .where(Pair.dataset_id == dataset_id, PAIR_IS_ACTIVE, IS_ACTIVE)
+        .order_by(Pair.id)
+    )
+
+
+def judged_pairs(dataset_id: int) -> Select[tuple[int]]:
+    """Jev가 두 응답을 따로 본 휴지통 밖 쌍 번호들."""
+    return active_pairs(dataset_id).where(
+        Pair.judge_chosen.is_not(None), Pair.judge_rejected.is_not(None)
+    )
+
+
+def pair_open_ids(dataset_id: int, check: CheckKey) -> Select[tuple[int]]:
+    """쌍 검사의 문제가 남은 쌍 번호들(번호 순). 길이 편향은 데이터셋의 모양이라 빈 결과."""
+    not_kept = not_(Pair.kept.contains([check.value]))
+    margin = Pair.judge_chosen - Pair.judge_rejected
+    if check == CheckKey.SAME_PAIR:
+        return active_pairs(dataset_id).where(Pair.marks.has_key(check.value), not_kept)
+    if check == CheckKey.JUDGE_REVERSED:
+        return judged_pairs(dataset_id).where(margin <= -REVERSED_MARGIN, not_kept)
+    if check == CheckKey.SMALL_MARGIN:
+        return judged_pairs(dataset_id).where(func.abs(margin) < SMALL_MARGIN, not_kept)
+    return select(Pair.id).where(Pair.id.is_(None))
+
+
 def jev_fine_ids(dataset_id: int, analysis_id: int, check: CheckKey) -> Select[tuple[int]]:
     """규칙이 잡은 검사(거절 · 짧은 응답)가 남았는데 Jev가 괜찮다고 본(지시를 따른다고 확인한) 대화 번호들.
 
@@ -135,8 +254,14 @@ def open_ids(dataset_id: int, check: CheckKey, *, analysis_id: int | None) -> Se
         return near_extras(dataset_id, analysis_id) if analysis_id else _none()
     if check == CheckKey.MISMATCH:
         return mismatch_ids(dataset_id, analysis_id) if analysis_id else _none()
-    if check == CheckKey.TASK_SKEW:
-        # 한 대화의 문제가 아니다(데이터셋의 모양).
+    if check == CheckKey.UNSAFE:
+        return unsafe_ids(dataset_id, analysis_id) if analysis_id else _none()
+    if check == CheckKey.NO_ANSWER:
+        return no_answer_ids(dataset_id)
+    if check == CheckKey.CONTAMINATION:
+        return contamination_ids(dataset_id)
+    if check == CheckKey.TASK_SKEW or CHECKS[check].unit == "pair":
+        # 한 대화의 문제가 아니다(데이터셋의 모양 · 쌍의 문제는 pair_open_ids).
         return _none()
     return (
         select(Prompt.id)
@@ -147,10 +272,16 @@ def open_ids(dataset_id: int, check: CheckKey, *, analysis_id: int | None) -> Se
 
 def any_problem(dataset_id: int, *, analysis_id: int | None) -> Any:
     """문제가 하나라도 남은 대화 조건 (목록의 '문제 있음')."""
-    conditions = [HAS_OPEN_CHECKS, Prompt.id.in_(duplicate_extras(dataset_id).scalar_subquery())]
+    conditions = [
+        HAS_OPEN_CHECKS,
+        Prompt.id.in_(duplicate_extras(dataset_id).scalar_subquery()),
+        Prompt.id.in_(no_answer_ids(dataset_id).scalar_subquery()),
+        Prompt.id.in_(contamination_ids(dataset_id).scalar_subquery()),
+    ]
     if analysis_id:
         conditions.append(Prompt.id.in_(near_extras(dataset_id, analysis_id).scalar_subquery()))
         conditions.append(Prompt.id.in_(mismatch_ids(dataset_id, analysis_id).scalar_subquery()))
+        conditions.append(Prompt.id.in_(unsafe_ids(dataset_id, analysis_id).scalar_subquery()))
     return or_(*conditions)
 
 

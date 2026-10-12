@@ -65,9 +65,11 @@ async def test_overview_waits_for_semantic_checks_before_analysis(client, db_ses
     # 확인: 뜻 검사는 재지 않은 줄(기다림)로만 있고 검사 목록에는 없다
     body = response.json()
     assert {item["key"]: item["reason"] for item in body["waiting"]} == {
+        "contamination": "평가셋 없음",
         "near_duplicate": "뜻 분석 전",
         "task_skew": "뜻 분석 전",
         "mismatch": "뜻 분석 전",
+        "unsafe": "뜻 분석 전",
     }
     assert "near_duplicate" not in [check["key"] for check in body["checks"]]
 
@@ -91,7 +93,8 @@ async def test_analysis_finds_near_duplicate_tasks_and_mismatch(client, db_sessi
 
     # 확인: 인구 둘째가 근접 중복 여분, 엉뚱한 답이 지시 불일치, 거절은 Jev가 마땅하다고 봤다
     assert state.done is not None and state.done.conversation_count == len(SEMANTIC)
-    assert overview["waiting"] == []
+    assert overview["waiting"] == [{"key": "contamination", "stage": 1, "reason": "평가셋 없음"}]
+    assert _check(overview, "unsafe")["count"] == 0
     assert _check(overview, "near_duplicate")["count"] == 1
     assert _check(overview, "mismatch")["count"] == 1
     assert _check(overview, "mismatch")["grade"] == "bad"
@@ -147,7 +150,10 @@ async def test_overview_waits_for_mismatch_when_jev_is_not_connected(client, db_
 
     # 확인: 근접 중복은 재고, 지시 불일치만 Jev를 기다린다
     assert _check(overview, "near_duplicate")["count"] == 1
-    assert overview["waiting"] == [{"key": "mismatch", "stage": 2, "reason": "Jev 미연결"}]
+    assert [item for item in overview["waiting"] if item["key"] != "contamination"] == [
+        {"key": "mismatch", "stage": 2, "reason": "Jev 미연결"},
+        {"key": "unsafe", "stage": 2, "reason": "Jev 미연결"},
+    ]
 
 
 async def test_decide_keep_near_duplicate_then_undo(client, db_session):

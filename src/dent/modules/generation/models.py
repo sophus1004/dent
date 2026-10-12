@@ -5,7 +5,11 @@
 - 지시: 맥락 메시지들(system · user · assistant …, 마지막은 user), 같은 지시를 찾는 해시, 출처,
   글을 넣거나 바꿀 때 한 번 잰 문제 표시(marks), 사람이 '그대로 두기'로 둔 검사(kept), 휴지통.
   문제 표시는 대화 전체(맥락 + 응답)를 잰 것이라 대화 단위로 지시 줄에 둔다(진단이 요청마다 글을 읽지 않게).
-- 응답: 지시에 대한 마지막 응답 글. 생각 과정(reasoning)은 따로 둔다(다음 판).
+- 응답: 지시에 대한 마지막 응답 글. 지시 하나에 응답이 여럿일 수 있고(선호 쌍 · 비교 만들기), SFT에 쓰는 것은 주 응답(is_main)
+  하나다. 응답이 없는 지시(지시만)도 있다(응답 만들기로 채운다). 생각 과정(reasoning)은 따로 둔다(다음 판).
+- 선호 쌍: 지시 하나에 고른 응답 · 버린 응답 한 쌍(DPO · KTO). Jev가 응답마다 본 판정을 함께 둔다.
+- 데이터셋 설정: 만들 데이터(SFT · 선호) · 평가셋 표시(오염 대조) · 학습할 모델의 토크나이저와 최대 길이.
+- 오염: 평가셋과 겹치는 지시와 겹친 몫.
 - 결정 기록: 검토에서 한 결정(빼기 · 그대로 두기 · 가리기 · 자르기 · 다시 쓰기)의 전 · 후. 되돌리기에 쓴다.
 - 뜻 분석: 지시 · 응답을 임베딩해 만든 한 번의 분석(지도 점 · 근접 중복 쌍 · Jev 판정). 데이터셋마다 다 만든 것은 하나다.
 train · valid · test는 나누지 않는다(한 덩어리).
@@ -30,6 +34,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy import text as sql_text
@@ -55,13 +60,21 @@ CHECK_KEY_MAX_LENGTH = 32
 # 빈 JSON 목록 (사람이 '그대로 두기'로 둔 검사가 없음)
 EMPTY_JSON_LIST = sql_text("'[]'::jsonb")
 
+# 학습할 모델 이름(허깅페이스 저장소)의 최대 길이
+MODEL_NAME_MAX_LENGTH = 200
+
+# 학습할 최대 길이의 기본값(토큰). 흔한 SFT 설정이다.
+DEFAULT_MAX_TOKENS = 4096
+
 
 class Role(StrEnum):
-    """메시지의 역할. 원본의 다른 이름(human · gpt …)은 가져올 때 이것으로 맞춘다."""
+    """메시지의 역할. 원본의 다른 이름(human · gpt · observation …)은 가져올 때 이것으로 맞춘다."""
 
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
+    # 도구가 돌려준 결과 (앞 응답의 tool_calls에 대한 답, tool_call_id로 잇는다)
+    TOOL = "tool"
 
 
 class Shape(StrEnum):
@@ -75,6 +88,17 @@ class Shape(StrEnum):
     ALPACA = "alpaca"
     # input1 · output1 · input2 · output2 … (턴마다 칸)
     TURNS = "turns"
+    # prompt · chosen · rejected (TRL 선호, prompt가 없으면 chosen의 앞 메시지가 지시)
+    PREFERENCE = "preference"
+    # 지시 · response1 · response2 · 선호 점수(음수면 1이 낫다, HelpSteer3)
+    PAIRWISE = "pairwise"
+
+
+class Goal(StrEnum):
+    """데이터셋으로 만들 학습 데이터. 선호면 흐름에 3 선호(비교 만들기 · 쌍 검사)가 붙는다."""
+
+    SFT = "sft"
+    PREFERENCE = "preference"
 
 
 class Source(StrEnum):
@@ -101,6 +125,12 @@ class Action(StrEnum):
     CUT = "cut"
     # LLM이 응답을 다시 쓴다 (출처는 synthetic)
     REWRITE = "rewrite"
+    # 선호 쌍의 고른 응답 · 버린 응답을 바꾼다
+    FLIP = "flip"
+    # 응답이 없는 지시에 LLM이 응답을 만든다 (출처는 synthetic)
+    ANSWER = "answer"
+    # 응답을 하나 더 만들어 Jev가 견준 선호 쌍을 더한다 (비교 만들기)
+    PAIR = "pair"
 
 
 class AnalysisStatus(StrEnum):
@@ -140,8 +170,12 @@ class Prompt(Base):
         ForeignKey("system_imports.id", ondelete="SET NULL")
     )
 
-    # 맥락 메시지들 [{"role": "system" · "user" · "assistant", "content": 글}]. 마지막은 user다.
+    # 맥락 메시지들 [{"role": "system" · "user" · "assistant" · "tool", "content": 글}]. 마지막은 user다
+    # (도구 대화면 마지막이 tool일 수 있다). 도구 호출은 응답 메시지의 tool_calls, 결과는 tool_call_id로 잇는다.
     messages: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+
+    # 대화에서 쓸 수 있는 도구 정의들 [{"name", "description", "parameters"}]. 도구 대화가 아니면 비어 있다.
+    tools: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
 
     # 같은 지시를 찾는 열쇠 (정규화한 맥락 전체의 sha256)
     text_hash: Mapped[str] = mapped_column(String(TEXT_HASH_LENGTH))
@@ -177,10 +211,19 @@ class Prompt(Base):
 
 
 class Response(Base):
-    """응답 한 건: 지시에 대한 마지막 응답 글과 출처."""
+    """응답 한 건: 지시에 대한 마지막 응답 글과 출처. 지시마다 주 응답(SFT에 쓰는 것)은 하나다."""
 
     __tablename__ = "generation_responses"
-    __table_args__ = (CheckConstraint(check_in("source", Source), name="source"),)
+    __table_args__ = (
+        CheckConstraint(check_in("source", Source), name="source"),
+        # 주 응답은 지시마다 하나다(검사 · SFT 내보내기가 이것만 본다).
+        Index(
+            "uq_generation_responses_main",
+            "prompt_id",
+            unique=True,
+            postgresql_where=sql_text("is_main"),
+        ),
+    )
 
     # 응답 번호
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
@@ -198,6 +241,15 @@ class Response(Base):
 
     # 생각 과정 (추론 SFT, 다음 판). 없으면 비어 있다.
     reasoning: Mapped[str | None] = mapped_column(Text)
+
+    # 응답이 부른 도구들 [{"id", "type": "function", "function": {"name", "arguments"}}]. 부르지 않았으면 비어 있다.
+    tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+
+    # SFT에 쓰는 주 응답인지 (원본 → 사람이 고른 것 → Jev 품질 순으로 고른다)
+    is_main: Mapped[bool] = mapped_column(server_default=sql_text("true"))
+
+    # 원본의 점수 (선호 데이터의 응답 점수 · 등급). 없으면 비어 있다.
+    score: Mapped[float | None] = mapped_column(REAL)
 
     # 출처: original · synthetic · human
     source: Mapped[str] = mapped_column(
@@ -238,8 +290,13 @@ class Change(Base):
     # 어느 검사를 보고 한 결정인지 (rules.CheckKey). 검사 없이 한 결정이면 비어 있다.
     check_key: Mapped[str | None] = mapped_column(String(CHECK_KEY_MAX_LENGTH))
 
-    # 결정: drop · keep · mask · cut · rewrite
+    # 결정: drop · keep · mask · cut · rewrite · flip · answer · pair
     action: Mapped[str] = mapped_column(String(ENUM_MAX_LENGTH))
+
+    # 선호 쌍에 한 결정이면 그 쌍 번호 (뒤집기 · 쌍 빼기 · 비교 만들기). 쌍을 지우면 기록도 지운다.
+    pair_id: Mapped[int | None] = mapped_column(
+        ForeignKey("generation_pairs.id", ondelete="CASCADE"), index=True
+    )
 
     # 바꾸기 전 · 후 상태 {"trashed": …, "kept": […], "messages": […], "content": …, "source": …} (바뀐 칸만)
     before: Mapped[dict[str, Any]] = mapped_column(JSONB)
@@ -396,3 +453,123 @@ class Judgment(Base):
 
     # '거절이 마땅하다(해로운 · 할 수 없는 요청)'의 예 확률. 거절로 표시된 대화만 묻는다.
     refusal_ok: Mapped[float | None] = mapped_column(REAL)
+
+    # '응답이 해롭다(폭력 · 무기 · 자해 · 범죄 방법 · 혐오 · 미성년 성적 내용)'의 예 확률. 묻지 못했으면 비운다.
+    unsafe: Mapped[float | None] = mapped_column(REAL)
+
+
+class Pair(Base):
+    """선호 쌍 한 건: 지시 하나의 고른 응답 · 버린 응답. Jev가 응답마다 본 판정과 쌍 단위의 검토 상태를 둔다."""
+
+    __tablename__ = "generation_pairs"
+    __table_args__ = (
+        CheckConstraint(check_in("source", Source), name="source"),
+        UniqueConstraint("chosen_id", "rejected_id"),
+    )
+
+    # 쌍 번호
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+
+    # 데이터셋 번호. 데이터셋을 지우면 쌍도 지운다. 데이터셋마다 쌍을 센다.
+    dataset_id: Mapped[int] = mapped_column(
+        ForeignKey("system_datasets.id", ondelete="CASCADE"), index=True
+    )
+
+    # 지시 번호. 지시를 지우면 쌍도 지운다.
+    prompt_id: Mapped[int] = mapped_column(
+        ForeignKey("generation_prompts.id", ondelete="CASCADE"), index=True
+    )
+
+    # 고른 응답 · 버린 응답 번호. 응답을 지우면 쌍도 지운다.
+    chosen_id: Mapped[int] = mapped_column(
+        ForeignKey("generation_responses.id", ondelete="CASCADE")
+    )
+    rejected_id: Mapped[int] = mapped_column(
+        ForeignKey("generation_responses.id", ondelete="CASCADE")
+    )
+
+    # 출처: original(가져온 쌍) · synthetic(비교 만들기)
+    source: Mapped[str] = mapped_column(
+        String(ENUM_MAX_LENGTH), server_default=Source.ORIGINAL.value
+    )
+
+    # 넣을 때 잰 쌍의 문제 표시 {검사: [표시]} (같은 쌍 · 동점)
+    marks: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=EMPTY_JSON_OBJECT)
+
+    # 사람이 '그대로 두기'로 둔 쌍 검사들
+    kept: Mapped[list[str]] = mapped_column(JSONB, server_default=EMPTY_JSON_LIST)
+
+    # Jev가 응답마다 따로 본 '지시를 따른다'의 확률 (고른 응답 · 버린 응답). 묻지 못했으면 비운다.
+    # 두 응답을 한 번에 보이고 고르게 하면 laya가 늘 뒤의 응답을 골라(위치 편향) 따로 묻는다.
+    judge_chosen: Mapped[float | None] = mapped_column(REAL)
+    judge_rejected: Mapped[float | None] = mapped_column(REAL)
+
+    # 휴지통에 넣은 시각 (쌍만 학습에서 빠진다. 지시 · 응답은 그대로)
+    trashed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # 만든 시각 · 고친 시각
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class DatasetSettings(Base):
+    """생성 데이터셋 설정 한 줄 (없으면 기본값). 데이터를 바꾸지 않는 값이라 데이터셋 수정 시각을 건드리지 않는다."""
+
+    __tablename__ = "generation_dataset_settings"
+    __table_args__ = (CheckConstraint(check_in("goal", Goal), name="goal"),)
+
+    # 데이터셋 번호. 데이터셋을 지우면 설정도 지운다.
+    dataset_id: Mapped[int] = mapped_column(
+        ForeignKey("system_datasets.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    # 만들 데이터: sft · preference
+    goal: Mapped[str] = mapped_column(String(ENUM_MAX_LENGTH), server_default=Goal.SFT.value)
+
+    # 평가셋인지. 평가셋은 다른 데이터셋의 오염 대조에 쓰이고, 자기는 오염 검사를 하지 않는다.
+    is_eval: Mapped[bool] = mapped_column(server_default=sql_text("false"))
+
+    # 학습할 모델(허깅페이스 저장소 이름). 그 토크나이저로 대화 길이를 잰다. 비어 있으면 글자 수로 어림한다.
+    tokenizer_model: Mapped[str | None] = mapped_column(String(MODEL_NAME_MAX_LENGTH))
+
+    # 학습할 최대 길이(토큰). 넘는 대화는 '긴 대화'다(트레이너가 뒤를 자른다).
+    max_tokens: Mapped[int] = mapped_column(Integer, server_default=str(DEFAULT_MAX_TOKENS))
+
+    # 지금 긴 대화 표시를 잰 토크나이저(모델 이름)와 최대 길이. 설정과 다르면 다시 잰다. 비어 있으면 글자 수 어림이다.
+    measured_model: Mapped[str | None] = mapped_column(String(MODEL_NAME_MAX_LENGTH))
+    measured_max_tokens: Mapped[int | None] = mapped_column(Integer)
+
+    # 마지막으로 오염을 대조한 평가셋들의 표시(번호 · 수정 시각)와 시각. 평가셋이 바뀌면 다시 대조한다.
+    contamination_signature: Mapped[str | None] = mapped_column(Text)
+    contamination_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # 고친 시각
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Contamination(Base):
+    """평가셋과 겹치는 지시 한 건: 가장 많이 겹친 평가 문항과 그 문항이 겹친 몫(8-gram)."""
+
+    __tablename__ = "generation_contaminations"
+
+    # 지시 번호 (학습 데이터셋의). 지시를 지우면 함께 지운다.
+    prompt_id: Mapped[int] = mapped_column(
+        ForeignKey("generation_prompts.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    # 데이터셋 번호. 데이터셋마다 센다.
+    dataset_id: Mapped[int] = mapped_column(
+        ForeignKey("system_datasets.id", ondelete="CASCADE"), index=True
+    )
+
+    # 겹친 평가 문항(평가셋 데이터셋의 지시) 번호. 평가 문항을 지우면 함께 지운다.
+    eval_prompt_id: Mapped[int] = mapped_column(
+        ForeignKey("generation_prompts.id", ondelete="CASCADE"), index=True
+    )
+
+    # 평가 문항의 낱말 가운데 학습 지시와 같은 8-gram에 든 몫 (0~1)
+    coverage: Mapped[float] = mapped_column(REAL)

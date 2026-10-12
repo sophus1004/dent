@@ -5,7 +5,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from dent.modules.generation.models import Action, AnalysisStatus, Shape
+from dent.modules.generation.models import (
+    MODEL_NAME_MAX_LENGTH,
+    Action,
+    AnalysisStatus,
+    Goal,
+    Shape,
+)
 from dent.modules.generation.rules import CheckKey, GradeKind, Who
 from dent.system.models import DATASET_NAME_MAX_LENGTH
 from dent.system.schemas import HelperRunRead, SourceCreate
@@ -21,6 +27,9 @@ MAX_TURN_COLUMNS = 20
 
 # 한 번에 휴지통에 넣거나 되살리는 대화의 최대 수
 BULK_MAX_IDS = 1_000
+
+# 학습할 최대 길이(토큰)의 범위: 짧은 대화 모델부터 긴 문맥 모델까지
+MAX_TOKENS_RANGE = (256, 262_144)
 
 # 대화 목록의 상태 거르기: 휴지통 밖 · 휴지통
 ConversationStatusFilter = Literal["active", "trash"]
@@ -69,11 +78,54 @@ class DatasetSummaryRead(BaseModel):
     updated_at: datetime
 
 
-class DatasetRead(DatasetSummaryRead):
-    """데이터셋 하나의 자세한 정보. 흐름의 입구 단계를 더한다."""
+class SettingsRead(BaseModel):
+    """생성 데이터셋 설정."""
 
-    # 흐름의 입구: 1 지시 · 2 응답 (첫 판은 응답이 있는 데이터만 받아 늘 2)
+    model_config = ConfigDict(from_attributes=True)
+
+    # 만들 데이터: sft · preference (선호면 흐름에 3 선호가 붙는다)
+    goal: Goal
+
+    # 평가셋인지 (다른 데이터셋의 오염 대조에 쓰인다)
+    is_eval: bool
+
+    # 학습할 모델(허깅페이스 저장소 이름). 비어 있으면 긴 대화를 글자 수로 어림한다.
+    tokenizer_model: str | None
+
+    # 학습할 최대 길이(토큰)
+    max_tokens: int
+
+    # 지금 긴 대화 표시를 잰 모델 · 최대 길이 (설정과 다르면 다시 재는 중이다. 비면 글자 수 어림)
+    measured_model: str | None
+    measured_max_tokens: int | None
+
+
+class SettingsUpdate(BaseModel):
+    """생성 데이터셋 설정 고치기. 준 값만 바꾼다. 학습할 모델을 빈 글로 주면 지운다(글자 수 어림)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    # 만들 데이터
+    goal: Goal | None = None
+
+    # 평가셋인지
+    is_eval: bool | None = None
+
+    # 학습할 모델 (빈 글이면 지운다)
+    tokenizer_model: str | None = Field(default=None, max_length=MODEL_NAME_MAX_LENGTH)
+
+    # 학습할 최대 길이(토큰)
+    max_tokens: int | None = Field(default=None, ge=MAX_TOKENS_RANGE[0], le=MAX_TOKENS_RANGE[1])
+
+
+class DatasetRead(DatasetSummaryRead):
+    """데이터셋 하나의 자세한 정보. 흐름의 입구 단계와 설정을 더한다."""
+
+    # 흐름의 입구: 1 지시(지시만) · 2 응답(지시 · 응답) · 3 선호(선호 쌍)
     entry_stage: int
+
+    # 데이터셋 설정 (고친 적이 없으면 기본값)
+    settings: SettingsRead
 
 
 # ---------- 필드 맞춤 · 가져오기 ----------
@@ -94,7 +146,7 @@ class TurnColumns(BaseModel):
 class FieldMappingRead(BaseModel):
     """열 이름으로 짐작한 필드 맞춤. 못 찾은 칸은 null."""
 
-    # 모양: messages · sharegpt · alpaca · turns
+    # 모양: messages · sharegpt · alpaca · turns · preference · pairwise
     shape: Shape
 
     # 대화 목록 칸 (messages · sharegpt)
@@ -108,6 +160,21 @@ class FieldMappingRead(BaseModel):
 
     # 턴마다 칸 (turns)
     turns: list[TurnColumns]
+
+    # 도구 정의 칸 (도구 대화, 선택)
+    tools: str | None = None
+
+    # 지시 · 고른 응답 · 버린 응답 · 두 점수 칸 (preference)
+    prompt: str | None = None
+    chosen: str | None = None
+    rejected: str | None = None
+    chosen_score: str | None = None
+    rejected_score: str | None = None
+
+    # 두 응답 · 선호 점수 칸 (pairwise, 지시는 prompt)
+    response1: str | None = None
+    response2: str | None = None
+    preference: str | None = None
 
 
 class MappingSuggestCreate(BaseModel):
@@ -134,7 +201,7 @@ class FieldMappingCreate(BaseModel):
     # 덧붙인 입력 칸 (alpaca, 선택). 있으면 지시 뒤에 빈 줄을 두고 붙인다.
     input: str | None = Field(default=None, max_length=COLUMN_NAME_MAX_LENGTH)
 
-    # 응답 칸 (alpaca에서 꼭)
+    # 응답 칸 (alpaca, 선택). 없으면 지시만 가져와 응답 만들기로 채운다.
     output: str | None = Field(default=None, max_length=COLUMN_NAME_MAX_LENGTH)
 
     # 시스템 칸 (alpaca · turns, 선택)
@@ -143,13 +210,36 @@ class FieldMappingCreate(BaseModel):
     # 턴마다 칸 (turns에서 꼭, 앞 턴부터)
     turns: list[TurnColumns] = Field(default_factory=list, max_length=MAX_TURN_COLUMNS)
 
+    # 도구 정의 칸 (도구 대화, 선택). 대화마다 [{"type": "function", "function": {...}}] 또는 [{"name", "parameters"}].
+    tools: str | None = Field(default=None, max_length=COLUMN_NAME_MAX_LENGTH)
+
+    # 지시 칸 (preference는 선택: 없으면 chosen의 앞 메시지가 지시, pairwise는 꼭). 글이나 대화 목록.
+    prompt: str | None = Field(default=None, max_length=COLUMN_NAME_MAX_LENGTH)
+
+    # 고른 응답 · 버린 응답 칸 (preference에서 꼭). 글이나 대화 목록(마지막 응답을 쓴다).
+    chosen: str | None = Field(default=None, max_length=COLUMN_NAME_MAX_LENGTH)
+    rejected: str | None = Field(default=None, max_length=COLUMN_NAME_MAX_LENGTH)
+
+    # 고른 응답 · 버린 응답의 원본 점수 칸 (preference, 선택). 같으면 동점이다.
+    chosen_score: str | None = Field(default=None, max_length=COLUMN_NAME_MAX_LENGTH)
+    rejected_score: str | None = Field(default=None, max_length=COLUMN_NAME_MAX_LENGTH)
+
+    # 두 응답 · 선호 점수 칸 (pairwise에서 꼭). 점수가 음수면 response1이, 양수면 response2가 낫고 0이면 동점.
+    response1: str | None = Field(default=None, max_length=COLUMN_NAME_MAX_LENGTH)
+    response2: str | None = Field(default=None, max_length=COLUMN_NAME_MAX_LENGTH)
+    preference: str | None = Field(default=None, max_length=COLUMN_NAME_MAX_LENGTH)
+
     @model_validator(mode="after")
     def _needs_columns(self) -> "FieldMappingCreate":
         missing = {
             Shape.MESSAGES: not self.messages,
             Shape.SHAREGPT: not self.messages,
-            Shape.ALPACA: not (self.instruction and self.output),
+            Shape.ALPACA: not self.instruction,
             Shape.TURNS: not self.turns,
+            Shape.PREFERENCE: not (self.chosen and self.rejected),
+            Shape.PAIRWISE: not (
+                self.prompt and self.response1 and self.response2 and self.preference
+            ),
         }[self.shape]
         if missing:
             raise ValueError("이 모양에 꼭 있어야 하는 칸을 골라 주세요.")
@@ -157,7 +247,9 @@ class FieldMappingCreate(BaseModel):
 
     def used_columns(self) -> set[str]:
         """맞춤에 쓴 열 이름들 (남는 열은 extra에 담는다)."""
-        names = {self.messages, self.instruction, self.input, self.output, self.system}
+        names = {self.messages, self.instruction, self.input, self.output, self.system, self.tools}
+        names |= {self.prompt, self.chosen, self.rejected, self.chosen_score, self.rejected_score}
+        names |= {self.response1, self.response2, self.preference}
         names |= {name for turn in self.turns for name in (turn.user, turn.assistant)}
         return {name for name in names if name}
 
@@ -189,14 +281,23 @@ class CheckRead(BaseModel):
     # 검사 이름
     key: CheckKey
 
-    # 흐름 단계: 1 지시 · 2 응답
+    # 흐름 단계: 1 지시 · 2 응답 · 3 선호
     stage: int
 
-    # 문제가 남은 대화 수 (사람이 '그대로 두기'로 둔 것은 빼고)
+    # 단위: conversation(대화) · pair(선호 쌍)
+    unit: Literal["conversation", "pair"]
+
+    # 문제가 남은 수 (사람이 '그대로 두기'로 둔 것은 빼고)
     count: int
 
-    # 휴지통 밖 대화 수에 대한 비율 (0~1)
+    # 비율의 분모: 휴지통 밖 대화 · 쌍 수 (Jev 판정이 표본이면 판정한 수)
+    total: int
+
+    # 분모에 대한 비율 (0~1)
     rate: float
+
+    # 분모가 표본인지 (안전처럼 앞 몇천 건만 Jev에 물은 검사)
+    sampled: bool = False
 
     # 등급
     grade: Grade
@@ -219,10 +320,10 @@ class WaitingRead(BaseModel):
     # 검사 이름
     key: CheckKey
 
-    # 흐름 단계: 1 지시 · 2 응답
+    # 흐름 단계: 1 지시 · 2 응답 · 3 선호
     stage: int
 
-    # 까닭 (예: 뜻 분석 전 · Jev 미연결)
+    # 까닭 (예: 뜻 분석 전 · Jev 미연결 · 평가셋 없음 · 대조 전)
     reason: str
 
 
@@ -238,6 +339,22 @@ class OverviewRead(BaseModel):
     # 휴지통에 있는 대화 수
     trashed: int
 
+    # 만들 데이터: sft · preference
+    goal: Goal
+
+    # 평가셋인지 (평가셋은 오염 검사를 하지 않는다)
+    is_eval: bool
+
+    # 응답이 없는 대화 수 (응답 만들기의 할 일)
+    unanswered: int
+
+    # 휴지통 밖 선호 쌍 수 · 주 응답은 있는데 쌍이 없는 대화 수 (비교 만들기의 할 일, 선호일 때)
+    pairs: int
+    unpaired: int
+
+    # 긴 대화를 잰 방법: tokens(학습할 모델의 토크나이저) · chars(글자 수 어림)
+    length_by: Literal["tokens", "chars"]
+
     # 턴 수(응답 수)별 대화 수 {1: 48, 2: 30, …}
     turns: dict[int, int]
 
@@ -247,7 +364,7 @@ class OverviewRead(BaseModel):
     # 아직 재지 못한 뜻 검사들 (뜻 분석 전 · Jev 없음). 종합 상태와 지금 단계에 세지 않는다.
     waiting: list[WaitingRead]
 
-    # 흐름에서 지금 단계: 1 지시 · 2 응답 · 3 내보내기(남은 문제 없음)
+    # 흐름에서 지금 단계: 1 지시 · 2 응답 · 3 선호 · 4 내보내기(남은 문제 없음)
     now_stage: int
 
     # 계산한 시각

@@ -7,10 +7,15 @@
 규칙은 모양만 본다(분야를 가정하지 않는다). 모양만으로 가를 수 없는 것은 판정하는 쪽을 둔다(CHECKS의 who):
 짧은 응답('0.'처럼 맞는 답일 수 있음) · 거절(정당한 거절일 수 있음)은 Jev가, 반복 문장 · 깨진 글자(인용 · 예시 단어일 수 있음)는 사람이 가른다.
 
-뜻을 봐야 하는 검사(근접 중복 · 과제 쏠림 · 지시 불일치)도 이름과 등급 규칙은 여기 CHECKS에 둔다(needs가 embedding · jev).
-재는 일은 뜻 분석(semantic.py)이 하고, 분석이 없으면 진단에서 '기다림'이다.
+뜻을 봐야 하는 검사(근접 중복 · 과제 쏠림 · 지시 불일치 · 안전)도 이름과 등급 규칙은 여기 CHECKS에 둔다(needs가 embedding · jev).
+재는 일은 뜻 분석(semantic.py)이 하고, 분석이 없으면 진단에서 '기다림'이다. 오염(needs eval)은 평가셋과 대조하는 작업이 잰다.
+
+3 선호의 검사는 대화가 아니라 선호 쌍 하나가 단위다(unit pair). 같은 쌍 · 동점은 넣을 때 쌍 표시로(measure_pair),
+판정 반대 · 작은 마진은 Jev가 두 응답을 따로 본 판정(지시를 따르나)으로, 길이 편향은 데이터셋의 쌍 전체로 잰다.
+두 응답을 한 번에 보이고 고르게 하면 laya가 위치에 끌려(늘 뒤의 응답) 쓸 수 없었다.
 """
 
+import json
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -37,10 +42,21 @@ class CheckKey(StrEnum):
     LANG_MIX = "lang_mix"
     BROKEN = "broken"
     LONG = "long"
+    # 응답이 없는 지시(지시만) · 도구 호출 형식
+    NO_ANSWER = "no_answer"
+    TOOL_CALL = "tool_call"
     # 뜻 분석이 재는 검사
     NEAR_DUPLICATE = "near_duplicate"
     TASK_SKEW = "task_skew"
     MISMATCH = "mismatch"
+    UNSAFE = "unsafe"
+    # 평가셋과 대조하는 검사
+    CONTAMINATION = "contamination"
+    # 3 선호: 쌍 하나가 단위
+    SAME_PAIR = "same_pair"
+    JUDGE_REVERSED = "judge_reversed"
+    SMALL_MARGIN = "small_margin"
+    LENGTH_BIAS = "length_bias"
 
 
 # 등급 매기는 방식: any = 하나라도 있으면 심각, warn_any = 하나라도 있으면 주의, rate = 대화 수에 대한 비율,
@@ -50,15 +66,18 @@ GradeKind = Literal["any", "warn_any", "rate", "share"]
 # 고치는 쪽: rule(규칙) · jev · llm · human(사람). 화면이 '찾기 → 고치기'로 보인다.
 Who = Literal["rule", "jev", "llm", "human"]
 
-# 재는 데 필요한 것: rule(글의 모양, 가져올 때 잼) · embedding(뜻 분석) · jev(뜻 분석 + Jev 판정)
-Needs = Literal["rule", "embedding", "jev"]
+# 재는 데 필요한 것: rule(글의 모양, 가져올 때 잼) · embedding(뜻 분석) · jev(뜻 분석 + Jev 판정) · eval(평가셋 대조)
+Needs = Literal["rule", "embedding", "jev", "eval"]
+
+# 검사의 단위: conversation(대화 하나 = 지시 줄) · pair(선호 쌍 하나)
+Unit = Literal["conversation", "pair"]
 
 
 @dataclass(frozen=True)
 class CheckSpec:
     """검사 하나의 단계 · 등급 규칙 · 고칠 수 있는 결정."""
 
-    # 흐름 단계: 1 지시 · 2 응답
+    # 흐름 단계: 1 지시 · 2 응답 · 3 선호
     stage: int
 
     # 등급 매기는 방식
@@ -78,6 +97,9 @@ class CheckSpec:
     # 재는 데 필요한 것
     needs: Needs = "rule"
 
+    # 단위 (비율의 분모도 이것: 대화 수 · 쌍 수)
+    unit: Unit = "conversation"
+
 
 # 검사마다의 규칙. 비율 경계는 분류 · 검색의 비슷한 검사와 맞췄다(중복 2% · 10%, 나머지 1% · 5%).
 CHECKS: dict[CheckKey, CheckSpec] = {
@@ -88,13 +110,21 @@ CHECKS: dict[CheckKey, CheckSpec] = {
         stage=1, kind="rate", good_max=0.02, warn_max=0.10, needs="embedding"
     ),
     CheckKey.PII: CheckSpec(stage=1, kind="warn_any", actions=("mask", "keep", "drop")),
+    # 평가셋 문항이 학습에 들어가면 점수가 거짓이 된다. 평가셋을 가져와 표시했을 때만 잰다.
+    CheckKey.CONTAMINATION: CheckSpec(stage=1, kind="any", actions=("drop", "keep"), needs="eval"),
     # 한 대화의 문제가 아니라 데이터셋의 모양이라 검토 결정이 없다(데이터를 더해 채운다).
     CheckKey.TASK_SKEW: CheckSpec(
         stage=1, kind="share", good_max=0.40, who=("human",), actions=(), needs="embedding"
     ),
+    # 지시만 있는 데이터의 할 일: 응답 만들기(LLM)로 채운다. 문제라기보다 다음 할 일이라 주의다.
+    CheckKey.NO_ANSWER: CheckSpec(
+        stage=2, kind="warn_any", who=("llm",), actions=("answer", "drop")
+    ),
     CheckKey.EMPTY_ANSWER: CheckSpec(
         stage=2, kind="any", who=("rule", "llm"), actions=("drop", "rewrite")
     ),
+    # 인자 JSON 깨짐 · 정의에 없는 도구 · 스키마 불일치 · 호출과 결과의 짝. 트레이너가 멈추거나 틀리게 배운다.
+    CheckKey.TOOL_CALL: CheckSpec(stage=2, kind="any", actions=("drop", "keep")),
     CheckKey.TRUNCATED: CheckSpec(
         stage=2, kind="any", who=("rule", "llm"), actions=("drop", "rewrite", "keep")
     ),
@@ -148,13 +178,48 @@ CHECKS: dict[CheckKey, CheckSpec] = {
         actions=("drop", "rewrite", "keep"),
         needs="jev",
     ),
+    # Jev가 해롭다고 본 응답(≥ 0.8). 분야를 가정하지 않는 판정 모델의 몫이고, 빼기는 사람이 고른다.
+    CheckKey.UNSAFE: CheckSpec(
+        stage=2, kind="warn_any", who=("jev", "human"), actions=("drop", "keep"), needs="jev"
+    ),
+    # 3 선호 (쌍 하나가 단위)
+    # 고른 응답과 버린 응답이 글자까지 같거나 원본 점수가 같다(배울 것이 없다).
+    CheckKey.SAME_PAIR: CheckSpec(stage=3, kind="warn_any", unit="pair", actions=("drop", "keep")),
+    # Jev가 버린 응답이 지시를 더 잘 따른다고 본다(라벨이 뒤집혔을 수 있다).
+    CheckKey.JUDGE_REVERSED: CheckSpec(
+        stage=3,
+        kind="warn_any",
+        who=("jev", "llm"),
+        actions=("flip", "drop", "keep"),
+        needs="jev",
+        unit="pair",
+    ),
+    # 두 응답이 거의 비슷하다(배울 신호가 약하다). 제안일 뿐 심각은 없다.
+    CheckKey.SMALL_MARGIN: CheckSpec(
+        stage=3,
+        kind="rate",
+        good_max=0.20,
+        warn_max=1.01,
+        who=("jev", "human"),
+        actions=("keep", "drop"),
+        needs="jev",
+        unit="pair",
+    ),
+    # 고른 응답이 더 긴 쌍의 몫. 길이만 배우게 된다. 데이터셋의 모양이라 결정이 없다.
+    CheckKey.LENGTH_BIAS: CheckSpec(
+        stage=3, kind="share", good_max=0.70, who=("human",), actions=(), unit="pair"
+    ),
 }
 
 # 글의 모양으로 재는 검사 (가져올 때 · 고칠 때 marks에 남는다)
 RULE_CHECKS = [key for key, spec in CHECKS.items() if spec.needs == "rule"]
 
 # 뜻 분석이 재는 검사
-SEMANTIC_CHECKS = [key for key, spec in CHECKS.items() if spec.needs != "rule"]
+SEMANTIC_CHECKS = [key for key, spec in CHECKS.items() if spec.needs in ("embedding", "jev")]
+
+# 대화의 글(marks)로 재는 검사 · 쌍의 표시로 재는 검사
+MARK_CHECKS = [key for key in RULE_CHECKS if CHECKS[key].unit == "conversation"]
+PAIR_CHECKS = [key for key, spec in CHECKS.items() if spec.unit == "pair"]
 
 # 짧은 응답의 글자 수 상한 (미만이면 짧다). '0.' · '예' 같은 한두 글자 답을 잡는다.
 SHORT_ANSWER_LENGTH = 5
@@ -230,8 +295,19 @@ SENTENCE_SPLIT = re.compile(r"(?<=[.!?다요])\s+")
 Mark = dict[str, int | None]
 
 
-def measure(messages: list[dict[str, Any]]) -> dict[str, list[Mark]]:
-    """대화 전체(맥락 + 응답)를 재 문제 표시를 돌려준다. {검사: [표시, …]} (문제가 없는 검사는 싣지 않는다)."""
+def measure(
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    token_count: int | None = None,
+    max_tokens: int | None = None,
+) -> dict[str, list[Mark]]:
+    """대화 전체(맥락 + 응답)를 재 문제 표시를 돌려준다. {검사: [표시, …]} (문제가 없는 검사는 싣지 않는다).
+
+    응답이 없는 대화(지시만)도 잰다(구조는 마지막이 지시인지 본다). tools는 대화의 도구 정의다.
+    token_count · max_tokens를 주면(학습할 모델의 토크나이저로 센 대화 길이) 긴 대화를 토큰으로 재고,
+    없으면 응답의 글자 수로 어림한다.
+    """
     marks: dict[str, list[Mark]] = {}
 
     def add(
@@ -242,6 +318,7 @@ def measure(messages: list[dict[str, Any]]) -> dict[str, list[Mark]]:
     if not is_well_formed(messages):
         add(CheckKey.STRUCTURE)
     user_text = " ".join(m["content"] for m in messages if m["role"] == Role.USER)
+    by_tokens = token_count is not None and max_tokens is not None
     for turn, message in enumerate(messages):
         content = message["content"]
         for _name, pattern in PII_PATTERNS:
@@ -251,19 +328,34 @@ def measure(messages: list[dict[str, Any]]) -> dict[str, list[Mark]]:
         if message["role"] == Role.USER and not content.strip():
             add(CheckKey.EMPTY_PROMPT, turn)
         if message["role"] == Role.ASSISTANT:
-            _measure_answer(content, turn=turn, user_text=user_text, add=add)
+            _measure_answer(
+                content,
+                turn=turn,
+                user_text=user_text,
+                add=add,
+                calls_tool=bool(message.get("tool_calls")),
+                by_tokens=by_tokens,
+            )
+    for turn in tool_problems(messages, tools):
+        add(CheckKey.TOOL_CALL, turn)
+    if by_tokens and token_count > max_tokens:  # type: ignore[operator]
+        last = len(messages) - 1
+        add(CheckKey.LONG, last if last >= 0 else None)
     return marks
 
 
-def _measure_answer(content: str, *, turn: int, user_text: str, add: Any) -> None:
-    """응답 하나를 잰다."""
+def _measure_answer(
+    content: str, *, turn: int, user_text: str, add: Any, calls_tool: bool, by_tokens: bool
+) -> None:
+    """응답 하나를 잰다. 도구를 부른 응답은 글이 비어도 된다. 토큰으로 재면 긴 응답은 대화 전체로 따로 잰다."""
     text = content.strip()
     if not text:
-        add(CheckKey.EMPTY_ANSWER, turn)
+        if not calls_tool:
+            add(CheckKey.EMPTY_ANSWER, turn)
         return
-    if len(text) < SHORT_ANSWER_LENGTH:
+    if len(text) < SHORT_ANSWER_LENGTH and not calls_tool:
         add(CheckKey.SHORT, turn, 0, len(content))
-    elif _looks_truncated(text):
+    elif _looks_truncated(text) and not calls_tool:
         end = len(content.rstrip())
         add(CheckKey.TRUNCATED, turn, max(0, end - TRUNCATED_MARK_LENGTH), end)
     # 다른 모델 이름은 사용자가 그 모델을 물은 대화면 문제가 아니다.
@@ -280,16 +372,147 @@ def _measure_answer(content: str, *, turn: int, user_text: str, add: Any) -> Non
         add(CheckKey.REPEAT, turn, *repeat)
     if not CODE_HINT.search(content) and _is_other_language(content):
         add(CheckKey.LANG_MIX, turn)
-    if len(content) > LONG_ANSWER_LENGTH:
+    if not by_tokens and len(content) > LONG_ANSWER_LENGTH:
         add(CheckKey.LONG, turn, LONG_ANSWER_LENGTH, len(content))
 
 
 def is_well_formed(messages: list[dict[str, Any]]) -> bool:
-    """역할 순서가 맞는지: system은 맨 앞에 하나만, 그 뒤는 user · assistant가 번갈아, 끝은 assistant."""
+    """역할 순서가 맞는지: system은 맨 앞에 하나만, 그 뒤는 user로 시작해 user · assistant가 번갈아 끝은 assistant.
+
+    응답이 없는 대화(지시만)는 끝이 user여도 된다. 도구 대화는 tool_calls가 있는 assistant 뒤에 tool 결과가
+    하나 이상 오고 다시 assistant가 이어진다(tool은 그 자리에만 온다).
+    """
     body = messages[1:] if messages and messages[0]["role"] == Role.SYSTEM else messages
-    expected = (Role.USER, Role.ASSISTANT)
-    alternates = all(message["role"] == expected[index % 2] for index, message in enumerate(body))
-    return bool(body) and alternates and body[-1]["role"] == Role.ASSISTANT
+    if not body or body[0]["role"] != Role.USER:
+        return False
+    previous = None
+    for message in body:
+        role = message["role"]
+        if role == Role.TOOL:
+            # tool은 도구를 부른 응답이나 다른 tool 결과 뒤에만 온다.
+            after_call = previous is not None and (
+                previous["role"] == Role.TOOL
+                or (previous["role"] == Role.ASSISTANT and previous.get("tool_calls"))
+            )
+            if not after_call:
+                return False
+        elif role == Role.USER:
+            if previous is not None and previous["role"] == Role.USER:
+                return False
+            if (
+                previous is not None
+                and previous["role"] == Role.ASSISTANT
+                and previous.get("tool_calls")
+            ):
+                return False
+        elif role == Role.ASSISTANT:
+            if previous is not None and previous["role"] == Role.ASSISTANT:
+                return False
+            if previous is not None and previous["role"] == Role.SYSTEM:
+                return False
+        else:
+            return False
+        previous = message
+    ends_ok = body[-1]["role"] in (Role.ASSISTANT, Role.USER, Role.TOOL)
+    return ends_ok
+
+
+# ---------- 도구 호출 ----------
+
+# 도구 인자의 JSON Schema 기본 형 → 파이썬 형 (스키마 검사는 필요한 만큼만: 꼭 있어야 할 칸 · 모르는 칸 · 기본 형)
+SCHEMA_TYPES: dict[str, tuple[type, ...]] = {
+    "string": (str,),
+    "integer": (int,),
+    "number": (int, float),
+    "boolean": (bool,),
+    "array": (list,),
+    "object": (dict,),
+}
+
+
+def tool_problems(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> list[int]:
+    """도구 호출이 잘못된 메시지 자리들(차례대로, 겹치지 않게). 도구 대화가 아니면 빈 목록.
+
+    인자 JSON이 깨짐 · 정의에 없는 도구(정의가 있을 때) · 꼭 있어야 할 인자가 없거나 형이 다름 ·
+    결과(tool)가 가리키는 호출이 없음 · 마지막 응답이 아닌데 결과가 없는 호출을 잡는다.
+    """
+    defined = {_tool_name(tool): tool for tool in tools or [] if _tool_name(tool)}
+    bad: list[int] = []
+    open_calls: dict[str, int] = {}
+    last = len(messages) - 1
+    for turn, message in enumerate(messages):
+        if message["role"] == Role.ASSISTANT:
+            for call in message.get("tool_calls") or []:
+                if _call_problem(call, defined):
+                    bad.append(turn)
+                elif call.get("id") and turn != last:
+                    open_calls[str(call["id"])] = turn
+        elif message["role"] == Role.TOOL:
+            call_id = message.get("tool_call_id")
+            if call_id is not None and str(call_id) in open_calls:
+                open_calls.pop(str(call_id))
+            elif call_id is not None:
+                bad.append(turn)
+    bad.extend(open_calls.values())
+    return sorted(set(bad))
+
+
+def tool_problem_text(call: dict[str, Any], tools: list[dict[str, Any]] | None) -> str | None:
+    """호출 하나의 문제를 낱말로 (검토 · 대화 패널에 보인다). 문제가 없으면 None."""
+    defined = {_tool_name(tool): tool for tool in tools or [] if _tool_name(tool)}
+    return _call_problem(call, defined)
+
+
+def call_arguments(call: dict[str, Any]) -> dict[str, Any] | None:
+    """호출의 인자(사전). JSON 글이면 읽는다. 읽을 수 없거나 사전이 아니면 None."""
+    function = call.get("function") or call
+    arguments = function.get("arguments", {})
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments) if arguments.strip() else {}
+        except json.JSONDecodeError:
+            return None
+    return arguments if isinstance(arguments, dict) else None
+
+
+def _tool_name(tool: dict[str, Any]) -> str:
+    """도구 정의의 이름 ({"type": "function", "function": {...}} · {"name": …} 둘 다)."""
+    body = tool.get("function") if isinstance(tool.get("function"), dict) else tool
+    return str(body.get("name") or "")
+
+
+def _tool_parameters(tool: dict[str, Any]) -> dict[str, Any]:
+    body = tool.get("function") if isinstance(tool.get("function"), dict) else tool
+    parameters = body.get("parameters")
+    return parameters if isinstance(parameters, dict) else {}
+
+
+def _call_problem(call: dict[str, Any], defined: dict[str, dict[str, Any]]) -> str | None:
+    """호출 하나의 문제 낱말: 인자 JSON 깨짐 · 정의에 없는 도구 · 인자 빠짐 · 모르는 인자 · 인자 형."""
+    function = call.get("function") or call
+    name = str(function.get("name") or "")
+    arguments = call_arguments(call)
+    if arguments is None:
+        return "인자 JSON 깨짐"
+    if not defined:
+        return None
+    if name not in defined:
+        return "정의에 없는 도구"
+    schema = _tool_parameters(defined[name])
+    properties = schema.get("properties") or {}
+    for required in schema.get("required") or []:
+        if required not in arguments:
+            return "인자 빠짐"
+    for key, value in arguments.items():
+        if key not in properties:
+            if schema.get("additionalProperties") is False:
+                return "모르는 인자"
+            continue
+        expected = SCHEMA_TYPES.get(str(properties[key].get("type", "")))
+        is_bool_as_number = isinstance(value, bool) and bool not in (expected or ())
+        if expected and (not isinstance(value, expected) or is_bool_as_number):
+            return "인자 형"
+    return None
 
 
 def find_loop(content: str) -> tuple[int, int] | None:
@@ -329,6 +552,20 @@ def _is_other_language(content: str) -> bool:
         latin > LANG_MIX_MIN_LATIN and hangul / max(1, hangul + latin) < LANG_MIX_MAX_HANGUL_SHARE
     )
     return is_latin or len(CJK.findall(prose)) > LANG_MIX_MAX_CJK
+
+
+# ---------- 선호 쌍 ----------
+
+
+def measure_pair(
+    chosen: str, rejected: str, *, chosen_score: float | None, rejected_score: float | None
+) -> dict[str, list[Mark]]:
+    """선호 쌍 하나를 잰다: 고른 응답과 버린 응답이 글자까지 같거나(공백 무시) 원본 점수가 같으면 같은 쌍 · 동점."""
+    same_text = " ".join(chosen.split()) == " ".join(rejected.split())
+    tie = chosen_score is not None and rejected_score is not None and chosen_score == rejected_score
+    if same_text or tie:
+        return {CheckKey.SAME_PAIR.value: [{"turn": None, "start": None, "end": None}]}
+    return {}
 
 
 # ---------- 규칙으로 되는 고치기 ----------

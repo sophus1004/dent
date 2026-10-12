@@ -1,4 +1,5 @@
-"""생성 모듈이 작업 실행기에 맡기는 일: 가져오기(import), 뜻 분석(analysis), 도우미(helper), 내보내기(export).
+"""생성 모듈이 작업 실행기에 맡기는 일: 가져오기(import), 뜻 분석(analysis), 도우미(helper), 내보내기(export),
+길이 다시 재기(length), 오염 대조(contamination).
 
 작업 실행기(dent.worker)가 HANDLERS와 FAILURE_HANDLERS를 가져가 쓴다.
 
@@ -8,10 +9,20 @@
 
 import logging
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from dent.modules.generation import exporting, helper, importing, semantic
+from dent.modules.generation import (
+    contamination,
+    dataset_settings,
+    exporting,
+    helper,
+    importing,
+    lengths,
+    semantic,
+)
 from dent.modules.generation import service as generation_service
 from dent.system import exports as exports_service
 from dent.system import helper as helper_service
@@ -31,6 +42,11 @@ ANALYSIS_UNEXPECTED_ERROR_MESSAGE = "뜻 분석을 만드는 중 뜻밖의 오�
 ANALYSIS_INTERRUPTED_MESSAGE = "뜻 분석이 여러 번 중간에 끊겨 멈췄습니다. 다시 만들어 주세요."
 HELPER_UNEXPECTED_ERROR_MESSAGE = "도우미가 일하는 중 뜻밖의 오류가 났습니다. 로그를 확인하세요."
 HELPER_INTERRUPTED_MESSAGE = "도우미가 여러 번 중간에 끊겨 멈췄습니다. 다시 시작해 주세요."
+LENGTH_UNEXPECTED_ERROR_MESSAGE = "대화 길이를 재는 중 뜻밖의 오류가 났습니다. 로그를 확인하세요."
+CONTAMINATION_UNEXPECTED_ERROR_MESSAGE = (
+    "평가셋과 대조하는 중 뜻밖의 오류가 났습니다. 로그를 확인하세요."
+)
+INTERRUPTED_SIMPLE_MESSAGE = "작업이 여러 번 중간에 끊겨 멈췄습니다. 다시 해 주세요."
 
 
 async def run_import_job(job: Job, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
@@ -52,6 +68,14 @@ async def run_import_job(job: Job, *, transport: httpx.AsyncBaseTransport | None
         logger.exception("가져오기 %d번이 뜻밖의 오류로 멈췄습니다.", import_id)
         await _fail_import(import_id=import_id, job_id=job.id, message=UNEXPECTED_ERROR_MESSAGE)
         return
+
+    # 가져온 뒤 할 일(학습할 모델로 길이 다시 재기 · 평가셋 대조)을 넣는다. 못 넣어도 가져오기는 끝났다.
+    try:
+        async with get_sessionmaker()() as session:
+            import_row = await imports_service.get_import(session, import_id=import_id)
+            await dataset_settings.after_import(session, dataset_id=import_row.dataset_id)
+    except Exception:
+        logger.warning("가져온 뒤 할 일을 넣지 못했습니다.", exc_info=True)
 
     # 청소는 빠르게 하려는 것일 뿐이다. 못 해도 가져오기는 끝났고 DB가 나중에 한다.
     try:
@@ -211,11 +235,63 @@ async def _fail_export(*, export_id: int, job_id: int, message: str) -> None:
         )
 
 
+async def run_length_job(job: Job, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    """길이 다시 재기 작업: 학습할 모델의 토크나이저를 받고 데이터셋의 모든 대화를 다시 잰다."""
+    dataset_id = int(job.params["dataset_id"])
+    await _run_simple(
+        job,
+        lambda session: lengths.remeasure_dataset(
+            session, dataset_id=dataset_id, job_id=job.id, transport=transport
+        ),
+        unexpected=LENGTH_UNEXPECTED_ERROR_MESSAGE,
+    )
+
+
+async def run_contamination_job(job: Job) -> None:
+    """오염 대조 작업: 데이터셋 하나를 평가셋들과 대조한다."""
+    dataset_id = int(job.params["dataset_id"])
+    await _run_simple(
+        job,
+        lambda session: contamination.run_check(session, dataset_id=dataset_id, job_id=job.id),
+        unexpected=CONTAMINATION_UNEXPECTED_ERROR_MESSAGE,
+    )
+
+
+async def fail_interrupted_simple(job: Job) -> None:
+    """너무 여러 번 끊긴 길이 · 대조 작업은 작업만 실패로 둔다(모듈의 기록이 없다)."""
+    async with get_sessionmaker()() as session:
+        await jobs.fail_job(session, job_id=job.id, message=job.error or INTERRUPTED_SIMPLE_MESSAGE)
+
+
+async def _run_simple(
+    job: Job,
+    work: Callable[[AsyncSession], Awaitable[dict[str, Any]]],
+    *,
+    unexpected: str,
+) -> None:
+    """모듈의 기록 없이 작업만 있는 일을 돌린다. 도메인 예외는 그 문장으로, 뜻밖의 오류는 unexpected로 실패."""
+    try:
+        async with get_sessionmaker()() as session:
+            result = await work(session)
+            await jobs.finish_job(session, job_id=job.id, result=result)
+            await session.commit()
+    except AppError as error:
+        logger.warning("작업 %d번이 실패했습니다: %s", job.id, error.message)
+        async with get_sessionmaker()() as session:
+            await jobs.fail_job(session, job_id=job.id, message=error.message)
+    except Exception:
+        logger.exception("작업 %d번이 뜻밖의 오류로 멈췄습니다.", job.id)
+        async with get_sessionmaker()() as session:
+            await jobs.fail_job(session, job_id=job.id, message=unexpected)
+
+
 # 이 모듈의 작업 (모듈 이름, 작업 종류): 가져오기 · 뜻 분석 · 내보내기
 IMPORT_JOB = (generation_service.MODULE_NAME, imports_service.IMPORT_JOB_KIND)
 ANALYSIS_JOB = (generation_service.MODULE_NAME, semantic.ANALYSIS_JOB_KIND)
 HELPER_JOB = (generation_service.MODULE_NAME, helper.HELPER_JOB_KIND)
 EXPORT_JOB = (generation_service.MODULE_NAME, exports_service.EXPORT_JOB_KIND)
+LENGTH_JOB = (generation_service.MODULE_NAME, lengths.LENGTH_JOB_KIND)
+CONTAMINATION_JOB = (generation_service.MODULE_NAME, contamination.CONTAMINATION_JOB_KIND)
 
 # (모듈 이름, 작업 종류)별 처리 함수. 작업 실행기의 HANDLERS에 그대로 더해진다.
 HANDLERS: dict[tuple[str, str], Callable[[Job], Awaitable[None]]] = {
@@ -223,6 +299,8 @@ HANDLERS: dict[tuple[str, str], Callable[[Job], Awaitable[None]]] = {
     ANALYSIS_JOB: run_analysis_job,
     HELPER_JOB: run_helper_job,
     EXPORT_JOB: run_export_job,
+    LENGTH_JOB: run_length_job,
+    CONTAMINATION_JOB: run_contamination_job,
 }
 
 # (모듈 이름, 작업 종류)별 뒷정리 함수. 너무 여러 번 끊겨 실패로 둔 작업을 넘겨 모듈의 기록도 실패로 맞추게 한다.
@@ -231,4 +309,6 @@ FAILURE_HANDLERS: dict[tuple[str, str], Callable[[Job], Awaitable[None]]] = {
     ANALYSIS_JOB: fail_interrupted_analysis,
     HELPER_JOB: fail_interrupted_helper,
     EXPORT_JOB: fail_interrupted_export,
+    LENGTH_JOB: fail_interrupted_simple,
+    CONTAMINATION_JOB: fail_interrupted_simple,
 }

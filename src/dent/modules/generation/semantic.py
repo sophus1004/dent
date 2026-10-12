@@ -26,6 +26,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     Text,
+    and_,
     case,
     cast,
     delete,
@@ -33,10 +34,11 @@ from sqlalchemy import (
     literal,
     or_,
     select,
+    update,
 )
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import InstrumentedAttribute
+from sqlalchemy.orm import InstrumentedAttribute, aliased
 
 from dent.modules.generation import judging, problems, semantic_checks
 from dent.modules.generation import service as generation_service
@@ -47,6 +49,7 @@ from dent.modules.generation.models import (
     Judgment,
     MapPoint,
     NearDuplicate,
+    Pair,
     Prompt,
     Response,
     Role,
@@ -88,6 +91,12 @@ EMPTY_RESPONSE_TEXT = "(빈 응답)"
 # Jev: 이만큼 할 때마다 진행률을 적고 멈추라고 했는지 본다. 묻는 최대 수(laya 1건 30~60ms면 2분쯤).
 JEV_PROGRESS_EVERY = 20
 MAX_JEV_JUDGMENTS = 2_000
+
+# 안전을 Jev에 묻는 최대 대화 수. 넘으면 섞인 순서(번호의 해시)로 앞에서부터 묻고 진단에 '표본'으로 보인다.
+MAX_SAFETY_JUDGMENTS = 2_000
+
+# 선호 쌍을 Jev에 묻는 최대 쌍 수 (쌍마다 두 번: 고른 응답 · 버린 응답)
+MAX_PAIR_JUDGMENTS = 1_000
 
 # 저장 · 읽기에서 쿼리 하나로 다루는 줄 수
 SAVE_CHUNK = 20_000
@@ -145,6 +154,9 @@ class Rows:
     context_hashes: list[str] = field(default_factory=list)
     instruction_hashes: list[str] = field(default_factory=list)
     response_hashes: list[str] = field(default_factory=list)
+
+    # 주 응답이 있는지 (지시만인 대화는 지시 불일치 · 안전을 묻지 않는다)
+    has_answer: list[bool] = field(default_factory=list)
 
     # 해시 → (그 글을 가진 대화 번호, 응답 글인지)
     owners: dict[str, tuple[int, bool]] = field(default_factory=dict)
@@ -369,8 +381,13 @@ async def judgments_for(
 
 
 async def forget_judgments(db: AsyncSession, *, prompt_id: int) -> None:
-    """글이 바뀐 대화의 Jev 판정을 지운다(옛 글의 판정이라서). 커밋은 부른 쪽이 한다."""
+    """글이 바뀐 대화의 Jev 판정(대화 · 그 지시의 선호 쌍)을 지운다(옛 글의 판정이라서). 커밋은 부른 쪽이 한다."""
     await db.execute(delete(Judgment).where(Judgment.prompt_id == prompt_id))
+    await db.execute(
+        update(Pair)
+        .where(Pair.prompt_id == prompt_id)
+        .values(judge_chosen=None, judge_rejected=None)
+    )
 
 
 def instruction_text(messages: list[dict[str, Any]]) -> str:
@@ -508,7 +525,9 @@ async def build_analysis(
             "largest_count": largest,
         },
         "near": {"pairs": len(findings.near_pairs)},
-        "jev": jev_state,
+        "jev": {key: value for key, value in jev_state.items() if key not in ("safety", "pairs")},
+        "safety": jev_state.get("safety") or {"judged": 0},
+        "pairs": jev_state.get("pairs") or {"judged": 0},
     }
     analysis.status = AnalysisStatus.DONE
     analysis.params = projected.params
@@ -574,18 +593,19 @@ async def _rows(db: AsyncSession, *, dataset_id: int) -> Rows:
     rows = Rows()
     query = (
         select(Prompt.id, Prompt.text_hash, Prompt.messages, Response.content)
-        .join(Response, Response.prompt_id == Prompt.id)
+        .outerjoin(Response, and_(Response.prompt_id == Prompt.id, Response.is_main))
         .where(Prompt.dataset_id == dataset_id, IS_ACTIVE)
-        .order_by(Prompt.id, Response.id)
+        .order_by(Prompt.id)
         .execution_options(yield_per=READ_CHUNK)
     )
     async for prompt_id, context_hash, messages, content in await db.stream(query):
         instruction_hash = make_text_hash(instruction_text(messages))
-        response_hash = make_text_hash(response_text(content))
+        response_hash = make_text_hash(response_text(content or ""))
         rows.prompt_ids.append(prompt_id)
         rows.context_hashes.append(context_hash)
         rows.instruction_hashes.append(instruction_hash)
         rows.response_hashes.append(response_hash)
+        rows.has_answer.append(content is not None)
         rows.owners.setdefault(instruction_hash, (prompt_id, False))
         rows.owners.setdefault(response_hash, (prompt_id, True))
     return rows
@@ -681,16 +701,21 @@ async def _judge(
     rows: Rows,
     findings: semantic_checks.Findings,
     transport: httpx.AsyncBaseTransport | None,
-) -> tuple[dict[int, judging.Verdict], dict[str, str]] | None:
-    """규칙이 잡은 거절 · 짧은 응답과 지시 불일치 후보를 Jev에 묻는다. (대화 번호 → 판정, Jev 상태).
+) -> tuple[dict[int, judging.Verdict], dict[str, Any]] | None:
+    """Jev에 묻는다: 규칙이 잡은 거절 · 짧은 응답과 지시 불일치 후보는 '따르나'(거절이면 '마땅한가'도),
+    안전 표본은 '해로운가', 선호 쌍은 두 응답을 따로. (대화 번호 → 판정, Jev 상태).
 
     멈추라고 했으면 None. Jev가 없거나 실패하면 거기까지의 판정과 그 상태를 돌려준다(분석은 이어 간다).
     """
     flagged = await _flagged_for_jev(db, dataset_id=analysis.dataset_id)
     candidates = list(dict.fromkeys([*sorted(flagged), *_mismatch_prompt_ids(rows, findings)]))
     capped = candidates[:MAX_JEV_JUDGMENTS]
-    if not capped:
-        return {}, {"status": judging.JEV_JUDGED, "detail": "후보 없음"}
+    follows_ids = set(capped)
+    safety_ids = set(_safety_sample(rows))
+    asked = sorted(follows_ids | safety_ids)
+    pairs = await _pairs_to_judge(db, dataset_id=analysis.dataset_id)
+    if not asked and not pairs:
+        return {}, {"status": judging.JEV_JUDGED, "detail": "후보 없음", "safety": {"judged": 0}}
     connection = await connections.get_connection(db, role=ConnectionRole.JEV)
     if connection is None:
         return {}, {"status": judging.JEV_NOT_CONNECTED, "detail": "미연결"}
@@ -702,31 +727,91 @@ async def _judge(
         base_url=connection.base_url,
         model=connection.model,
     )
-    await jobs.start_phase(db, job_id=job_id, phase=PHASE_JUDGING, total=len(capped))
+    total = len(asked) + len(pairs)
+    await jobs.start_phase(db, job_id=job_id, phase=PHASE_JUDGING, total=total)
     await db.commit()
-    conversations = await _conversations(db, prompt_ids=capped)
+    conversations = await _conversations(db, prompt_ids=asked)
     verdicts: dict[int, judging.Verdict] = {}
-    for done, prompt_id in enumerate(capped, start=1):
-        messages, content = conversations[prompt_id]
-        try:
+    done = 0
+    try:
+        for prompt_id in asked:
+            if prompt_id not in conversations:
+                continue
+            messages, content = conversations[prompt_id]
             verdicts[prompt_id] = await judging.ask(
                 connection,
                 messages=messages,
                 response=content,
+                with_follows=prompt_id in follows_ids,
                 with_refusal=flagged.get(prompt_id, False),
+                with_safety=prompt_id in safety_ids,
                 transport=transport,
             )
-        except ExternalServiceError as error:
-            return verdicts, {"status": judging.JEV_FAILED, "detail": error.message}
-        is_checkpoint = done % JEV_PROGRESS_EVERY == 0 or done == len(capped)
-        if is_checkpoint:
-            await jobs.set_progress(db, job_id=job_id, done=done, total=len(capped))
-            await db.commit()
-            if await _stop_if_canceled(db, analysis=analysis, job_id=job_id):
+            done += 1
+            if await _checkpoint(db, analysis=analysis, job_id=job_id, done=done, total=total):
                 return None
+        for pair_id, messages, chosen, rejected in pairs:
+            chosen_follows, rejected_follows = await judging.judge_pair(
+                connection,
+                messages=messages,
+                chosen=chosen,
+                rejected=rejected,
+                transport=transport,
+            )
+            await db.execute(
+                update(Pair)
+                .where(Pair.id == pair_id)
+                .values(judge_chosen=chosen_follows, judge_rejected=rejected_follows)
+            )
+            done += 1
+            if await _checkpoint(db, analysis=analysis, job_id=job_id, done=done, total=total):
+                return None
+    except ExternalServiceError as error:
+        return verdicts, {"status": judging.JEV_FAILED, "detail": error.message}
     is_capped = len(candidates) > len(capped)
     detail = f"{len(verdicts)}건" + (f" · 상한 {MAX_JEV_JUDGMENTS}" if is_capped else "")
-    return verdicts, {"status": judging.JEV_JUDGED, "detail": detail}
+    state = {
+        "status": judging.JEV_JUDGED,
+        "detail": detail,
+        "safety": {"judged": len(safety_ids)},
+        "pairs": {"judged": len(pairs)},
+    }
+    return verdicts, state
+
+
+async def _checkpoint(
+    db: AsyncSession, *, analysis: Analysis, job_id: int, done: int, total: int
+) -> bool:
+    """JEV_PROGRESS_EVERY마다 진행률을 적고 커밋한다. 멈추라고 했으면 True."""
+    is_checkpoint = done % JEV_PROGRESS_EVERY == 0 or done == total
+    if not is_checkpoint:
+        return False
+    await jobs.set_progress(db, job_id=job_id, done=done, total=total)
+    await db.commit()
+    return await _stop_if_canceled(db, analysis=analysis, job_id=job_id)
+
+
+async def _pairs_to_judge(
+    db: AsyncSession, *, dataset_id: int
+) -> list[tuple[int, list[dict[str, Any]], str, str]]:
+    """아직 Jev가 보지 않은 휴지통 밖 선호 쌍 (번호, 맥락, 고른 응답, 버린 응답), 최대 MAX_PAIR_JUDGMENTS."""
+    chosen = aliased(Response)
+    rejected = aliased(Response)
+    rows = await db.execute(
+        select(Pair.id, Prompt.messages, chosen.content, rejected.content)
+        .join(Prompt, Prompt.id == Pair.prompt_id)
+        .join(chosen, chosen.id == Pair.chosen_id)
+        .join(rejected, rejected.id == Pair.rejected_id)
+        .where(
+            Pair.dataset_id == dataset_id,
+            Pair.trashed_at.is_(None),
+            IS_ACTIVE,
+            or_(Pair.judge_chosen.is_(None), Pair.judge_rejected.is_(None)),
+        )
+        .order_by(Pair.id)
+        .limit(MAX_PAIR_JUDGMENTS)
+    )
+    return [(pair_id, messages, good, bad) for pair_id, messages, good, bad in rows]
 
 
 async def _flagged_for_jev(db: AsyncSession, *, dataset_id: int) -> dict[int, bool]:
@@ -743,7 +828,17 @@ async def _flagged_for_jev(db: AsyncSession, *, dataset_id: int) -> dict[int, bo
 
 
 def _mismatch_prompt_ids(rows: Rows, findings: semantic_checks.Findings) -> list[int]:
-    return [rows.prompt_ids[index] for index in findings.mismatch_candidates]
+    """지시 불일치 후보 대화 번호들 (주 응답이 없는 지시만은 뺀다)."""
+    return [
+        rows.prompt_ids[index] for index in findings.mismatch_candidates if rows.has_answer[index]
+    ]
+
+
+def _safety_sample(rows: Rows) -> list[int]:
+    """안전을 물을 대화 번호들: 주 응답이 있는 대화를 번호의 해시 순(섞인 순서)으로 앞 MAX_SAFETY_JUDGMENTS개."""
+    answered = [pid for pid, has in zip(rows.prompt_ids, rows.has_answer, strict=True) if has]
+    ordered = sorted(answered, key=lambda prompt_id: make_text_hash(str(prompt_id)))
+    return ordered[:MAX_SAFETY_JUDGMENTS]
 
 
 async def _conversations(
@@ -754,9 +849,9 @@ async def _conversations(
     for chunk in itertools.batched(prompt_ids, SAVE_CHUNK):
         for prompt_id, messages, content in await db.execute(
             select(Prompt.id, Prompt.messages, Response.content)
-            .join(Response, Response.prompt_id == Prompt.id)
+            .join(Response, and_(Response.prompt_id == Prompt.id, Response.is_main))
             .where(Prompt.id.in_(chunk))
-            .order_by(Prompt.id, Response.id)
+            .order_by(Prompt.id)
         ):
             found[prompt_id] = (messages, content)
     return found
@@ -827,6 +922,7 @@ async def _save_judgments(
             "similarity": similarity.get(prompt_id),
             "follows": verdict.follows,
             "refusal_ok": verdict.refusal_ok,
+            "unsafe": verdict.unsafe,
         }
         for prompt_id, verdict in verdicts.items()
     ]

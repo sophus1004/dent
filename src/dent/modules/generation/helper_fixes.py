@@ -35,8 +35,16 @@ CHECK_NAMES: dict[CheckKey, str] = {
     CheckKey.REPEAT: "반복 문장",
     CheckKey.LANG_MIX: "언어 섞임",
     CheckKey.BROKEN: "깨진 글자",
-    CheckKey.LONG: "긴 응답",
+    CheckKey.LONG: "긴 대화",
     CheckKey.MISMATCH: "지시 불일치",
+    CheckKey.NO_ANSWER: "응답 없음",
+    CheckKey.TOOL_CALL: "도구 호출 형식",
+    CheckKey.UNSAFE: "안전",
+    CheckKey.CONTAMINATION: "오염",
+    CheckKey.SAME_PAIR: "같은 쌍 · 동점",
+    CheckKey.JUDGE_REVERSED: "판정 반대",
+    CheckKey.SMALL_MARGIN: "작은 마진",
+    CheckKey.LENGTH_BIAS: "길이 편향",
 }
 
 # AI로 고치기 한 번에 LLM으로 다시 쓰는 최대 대화 수 (토큰 상한 안에서)
