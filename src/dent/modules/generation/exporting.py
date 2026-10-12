@@ -151,7 +151,8 @@ async def _write_jsonl(
     rows: AsyncIterator[tuple[list[dict[str, Any]], str, str]], *, path: Path
 ) -> dict[str, Any]:
     count = 0
-    with path.open("w", encoding="utf-8") as file:
+    # 줄바꿈은 OS와 상관없이 \n이다(Windows에서 \r\n이 되지 않게: 같은 데이터면 어느 PC에서나 같은 파일).
+    with path.open("w", encoding="utf-8", newline="\n") as file:
         async for messages, content, source in rows:
             file.write(json.dumps(_line(messages, content, source), ensure_ascii=False) + "\n")
             count += 1

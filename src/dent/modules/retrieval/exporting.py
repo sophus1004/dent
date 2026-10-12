@@ -432,7 +432,8 @@ def _train_line(pack: Pack, query_id: int, *, data: ExportCreate) -> dict[str, A
 
 def _write_jsonl(pack: Pack, *, path: Any, data: ExportCreate) -> dict[str, Any]:
     counts = {"queries": 0, "positives": 0, "negatives": 0}
-    with path.open("w", encoding="utf-8") as file:
+    # 줄바꿈은 OS와 상관없이 \n이다(Windows에서 \r\n이 되지 않게: 같은 데이터면 어느 PC에서나 같은 파일).
+    with path.open("w", encoding="utf-8", newline="\n") as file:
         for query_id in pack.query_ids():
             line = _train_line(pack, query_id, data=data)
             file.write(json.dumps(line, ensure_ascii=False) + "\n")

@@ -21,7 +21,7 @@ async def _done_export(db_session):
         options={},
     )
     exports.start_export(export)
-    exports.file_path(export).write_text('{"query": "환불"}\n', encoding="utf-8")
+    exports.file_path(export).write_text('{"query": "환불"}\n', encoding="utf-8", newline="\n")
     await exports.finish_export(db_session, export, job_id=export.job_id, result={"lines": 1})
     await db_session.commit()
     return export

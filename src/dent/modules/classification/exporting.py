@@ -234,7 +234,8 @@ async def _write_jsonl(
     rows: AsyncIterator[tuple[str, int, str]], *, labels: dict[int, tuple[int, str]], path: Path
 ) -> dict[str, Any]:
     count = 0
-    with path.open("w", encoding="utf-8") as file:
+    # 줄바꿈은 OS와 상관없이 \n이다(Windows에서 \r\n이 되지 않게: 같은 데이터면 어느 PC에서나 같은 파일).
+    with path.open("w", encoding="utf-8", newline="\n") as file:
         async for text, label_id, source in rows:
             line = _line(text, label=labels[label_id], source=source)
             file.write(json.dumps(line, ensure_ascii=False) + "\n")
@@ -269,7 +270,9 @@ def _write_labels(labels: dict[int, tuple[int, str]], *, path: Path) -> dict[str
         "id2label": {str(number): name for number, name in ordered},
         "label2id": {name: number for number, name in ordered},
     }
-    path.write_text(json.dumps(content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(content, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
     return {"records": 0, "labels": len(labels)}
 
 
