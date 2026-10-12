@@ -10,6 +10,7 @@
 - 3 선호(쌍 단위)는 만들 데이터가 선호이거나 쌍이 있을 때만: 같은 쌍 · 동점은 쌍 표시로, 판정 반대 · 작은 마진은
   Jev가 두 응답을 따로 본 판정이 있는 쌍으로(없으면 기다림), 길이 편향은 고른 응답이 더 긴 쌍의 몫으로 센다.
 기다림은 종합 상태 · 지금 단계에 세지 않는다. 조건은 problems.py 한 곳에 있다.
+검사마다 '그대로 두기'로 둔 수(kept)도 싣는다. 사람이 문제가 아니라고 둔 것이 많으면 규칙의 오탐을 의심한다.
 """
 
 from datetime import UTC, datetime
@@ -119,7 +120,7 @@ async def get_overview(db: AsyncSession, *, dataset_id: int) -> OverviewRead:
     shows_pairs = settings.goal == Goal.PREFERENCE.value or pair_total > 0
     unpaired = 0
     if shows_pairs:
-        unpaired = await _count(db, _unpaired(dataset_id))
+        unpaired = await _count(db, problems.pair_targets(dataset_id))
         if pair_total:
             await _pair_checks(
                 db,
@@ -131,8 +132,15 @@ async def get_overview(db: AsyncSession, *, dataset_id: int) -> OverviewRead:
                 jev_status=(analysis.checks.get("jev") or {}).get("status") if analysis else None,
             )
 
+    kept = await problems.kept_counts(db, dataset_id=dataset_id)
     checks = [
-        _check_read(key, count=int(counts[key]), total=totals[key], sampled=key in sampled)
+        _check_read(
+            key,
+            count=int(counts[key]),
+            total=totals[key],
+            sampled=key in sampled,
+            kept=kept.get(key.value, 0),
+        )
         for key in CHECKS
         if key in counts
     ]
@@ -150,7 +158,11 @@ async def get_overview(db: AsyncSession, *, dataset_id: int) -> OverviewRead:
         turns=await _turn_counts(db, dataset_id=dataset_id),
         checks=checks,
         waiting=waiting,
-        now_stage=_now_stage(checks, has_pairs=shows_pairs),
+        now_stage=_now_stage(
+            checks,
+            has_pairs=shows_pairs,
+            wants_pairs=settings.goal == Goal.PREFERENCE.value and unpaired > 0,
+        ),
         computed_at=datetime.now(UTC),
     )
 
@@ -205,18 +217,6 @@ async def _pair_checks(
     waiting += [_waiting(key, reason) for key in JUDGED_PAIR_CHECKS]
 
 
-def _unpaired(dataset_id: int) -> Any:
-    """주 응답은 있는데 휴지통 밖 선호 쌍이 없는 휴지통 밖 대화 (비교 만들기의 할 일)."""
-    has_pair = (
-        select(Pair.id)
-        .where(Pair.prompt_id == Prompt.id, generation_service.PAIR_IS_ACTIVE)
-        .exists()
-    )
-    return select(Prompt.id).where(
-        Prompt.dataset_id == dataset_id, IS_ACTIVE, HAS_MAIN_ANSWER, ~has_pair
-    )
-
-
 def _chosen_longer(dataset_id: int) -> Any:
     """고른 응답이 버린 응답보다 긴 휴지통 밖 쌍 (길이 편향의 분자)."""
     chosen = aliased(Response)
@@ -238,7 +238,9 @@ def _waiting(key: CheckKey, reason: str) -> WaitingRead:
     return WaitingRead(key=key, stage=CHECKS[key].stage, reason=reason)
 
 
-def _check_read(key: CheckKey, *, count: int, total: int, sampled: bool) -> CheckRead:
+def _check_read(
+    key: CheckKey, *, count: int, total: int, sampled: bool, kept: int = 0
+) -> CheckRead:
     spec = CHECKS[key]
     return CheckRead(
         key=key,
@@ -248,6 +250,7 @@ def _check_read(key: CheckKey, *, count: int, total: int, sampled: bool) -> Chec
         total=total,
         rate=count / total if total else 0.0,
         sampled=sampled,
+        kept=kept,
         grade=rules.grade_of(key, count=count, total=total),  # type: ignore[arg-type]
         kind=spec.kind,
         good_max=spec.good_max,
@@ -257,13 +260,16 @@ def _check_read(key: CheckKey, *, count: int, total: int, sampled: bool) -> Chec
     )
 
 
-def _now_stage(checks: list[CheckRead], *, has_pairs: bool) -> int:
-    """흐름에서 지금 단계: 문제가 남은 첫 단계, 없으면 내보내기. 선호가 아니면 3 선호는 보지 않는다."""
+def _now_stage(checks: list[CheckRead], *, has_pairs: bool, wants_pairs: bool) -> int:
+    """흐름에서 지금 단계: 문제가 남은 첫 단계, 없으면 내보내기. 선호가 아니면 3 선호는 보지 않는다.
+
+    만들 데이터가 선호인데 쌍이 없는 지시가 남았으면(비교 만들기의 할 일) 3 선호에 머문다.
+    """
     stages = (1, 2, 3) if has_pairs else (1, 2)
     for stage in stages:
         if any(check.stage == stage and check.grade != "good" for check in checks):
             return stage
-    return EXPORT_STAGE
+    return 3 if wants_pairs else EXPORT_STAGE
 
 
 async def _turn_counts(db: AsyncSession, *, dataset_id: int) -> dict[int, int]:

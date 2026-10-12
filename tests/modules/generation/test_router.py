@@ -164,7 +164,12 @@ async def test_review_queue_lists_duplicate_extras_after_first(client, db_sessio
     )
 
     # 확인: 같은 지시 무리에서 번호가 가장 작은 것은 남기고 뒤의 것만
-    assert response.json() == {"check": "duplicate", "ids": [ids[5]], "total": 1}
+    assert response.json() == {
+        "check": "duplicate",
+        "unit": "conversation",
+        "ids": [ids[5]],
+        "total": 1,
+    }
 
 
 async def test_decide_keep_removes_problem_and_undo_brings_it_back(client, db_session):

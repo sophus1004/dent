@@ -196,7 +196,7 @@ def upgrade() -> None:
         "generation_pairs",
         ["pair_id"],
         ["id"],
-        ondelete="CASCADE",
+        ondelete="SET NULL",
     )
     op.drop_constraint(op.f("ck_generation_changes_action"), "generation_changes", type_="check")
     op.create_check_constraint(

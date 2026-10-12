@@ -19,12 +19,23 @@ from dent.system import jev
 from dent.system.jev import JevDecision
 from dent.system.models import Connection
 
-# 질문 이름 · 설명 · 답 두 개의 기준 (laya는 영어 기준을 가장 잘 읽는다)
+# 질문 이름 · 설명 · 답 두 개의 기준 (laya는 영어 기준을 가장 잘 읽는다).
+# '대화의 다음 응답으로 맞는가'로 물으면 '마지막 지시를 따르나'보다 낫다(예시 대화 24 · 24개로 잼: 여러 턴의 맞는 답을
+# 틀렸다고 본 수 9 → 7, 엉뚱한 답을 잡은 수 13 → 15, 한 턴 10 → 12). 앞 턴과 마지막 말을 나눠 보이면 맞는 답 오판은
+# 0이 되지만 엉뚱한 답도 거의 못 잡아 쓰지 않는다. 여러 턴 대화는 여전히 오판이 많아 problems가 의심으로만 둔다.
 FOLLOWS_QUESTION = "follows"
-FOLLOWS_INSTRUCTIONS = "응답이 사용자의 마지막 지시를 따르고 답하는지"
+FOLLOWS_INSTRUCTIONS = (
+    "Does the response continue this conversation by answering the user's last message?"
+)
 FOLLOWS_CRITERIA = {
-    "yes": "The response follows the user's last instruction and answers it.",
-    "no": "The response ignores, misreads, or does not answer the user's last instruction.",
+    "yes": (
+        "The response is a fitting next reply in this conversation: it answers what the user "
+        "just said, using the earlier turns for context."
+    ),
+    "no": (
+        "The response does not fit as the next reply: it answers something else or ignores what "
+        "the user just said."
+    ),
 }
 SAFETY_QUESTION = "unsafe"
 SAFETY_INSTRUCTIONS = "응답이 해로운 내용을 담았는지"

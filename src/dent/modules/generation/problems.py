@@ -3,8 +3,8 @@
 - 글의 모양 검사: 가져올 때 · 고칠 때 한 번 잰 open_checks(남은 검사)에 든 대화.
 - 같은 지시: 같은 맥락 해시 무리에서 번호가 가장 작은 것을 남긴 나머지(여분).
 - 근접 중복: 다 만든 뜻 분석의 근접 중복 쌍에서, 번호가 더 작은 짝이 휴지통 밖에 있는 대화(여분).
-- 지시 불일치: 다 만든 뜻 분석에서 Jev가 '따르지 않음'을 확인한 대화. 까닭이 다른 검사로 이미 드러난 대화는 뺀다.
-  Jev가 애매하게 본 것(따름 0.2~0.5)은 '의심'이라 진단에 세지 않고 도우미의 LLM이 한 번 더 본다.
+- 지시 불일치: 다 만든 뜻 분석에서 Jev가 '따르지 않음'을 확인한 한 턴 대화. 까닭이 다른 검사로 이미 드러난 대화는 뺀다.
+  Jev가 애매하게 본 것(따름 0.2~0.5)과 여러 턴 대화의 '따르지 않음'은 '의심'이라 진단에 세지 않고 도우미의 LLM이 본다.
 - 응답 없음: 주 응답이 없는 대화(지시만). 오염: 평가셋과 겹친 대화. 안전: Jev가 해롭다고 본 응답.
 - 3 선호(쌍 번호): 같은 쌍 · 동점(쌍 표시), 판정 반대 · 작은 마진(Jev가 두 응답을 따로 본 따름 점수).
 모두 휴지통 밖만 보고, 사람이 '그대로 두기'로 둔 검사는 뺀다. 번호 순.
@@ -12,7 +12,7 @@
 
 from typing import Any
 
-from sqlalchemy import Select, and_, exists, func, not_, or_, select
+from sqlalchemy import Select, and_, exists, func, literal_column, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -25,6 +25,7 @@ from dent.modules.generation.models import (
     NearDuplicate,
     Pair,
     Prompt,
+    Role,
 )
 from dent.modules.generation.rules import CHECKS, CheckKey
 from dent.modules.generation.service import (
@@ -37,6 +38,13 @@ from dent.modules.generation.service import (
 
 # 지시 불일치 의심: Jev 따름이 확인 경계(0.2) 위 · 이 값 이하. 진단에 세지 않고 도우미의 LLM이 본다.
 MISMATCH_SUSPECT_FOLLOWS = 0.5
+
+# 맥락의 사용자 말만 고르는 JSON 경로 (여러 턴 대화를 가른다)
+USER_PATH = literal_column(f"'$[*] ? (@.role == \"{Role.USER.value}\")'::jsonpath")
+
+# 여러 턴 대화: 사용자 말이 둘 이상. Jev는 앞 턴을 잇는 짧은 말('부산은요?' · 주문 번호)을 잘 읽지 못해
+# (예시 상담 대화의 맞는 답 24개 중 7개를 따르지 않음으로 봄) 따르지 않음도 확인이 아니라 의심으로 둔다.
+IS_MULTI_TURN = func.jsonb_array_length(func.jsonb_path_query_array(Prompt.messages, USER_PATH)) > 1
 
 # 작은 마진: 두 응답의 Jev 따름 점수 차이가 이보다 작으면 두 응답이 비슷하다(배울 신호가 약하다)
 SMALL_MARGIN = 0.1
@@ -118,6 +126,7 @@ def mismatch_ids(dataset_id: int, analysis_id: int) -> Select[tuple[int]]:
             IS_ACTIVE,
             not_(is_kept(CheckKey.MISMATCH)),
             Judgment.follows <= 1 - judging.CONFIRM_PROBABILITY,
+            not_(IS_MULTI_TURN),
             # 표시(marks)는 '그대로 두기'로 둔 검사도 남아 있어, 둔 거절도 여기서 빠진다.
             not_(or_(*(Prompt.marks.has_key(key.value) for key in EXPLAINED_MISMATCH))),
         )
@@ -126,7 +135,8 @@ def mismatch_ids(dataset_id: int, analysis_id: int) -> Select[tuple[int]]:
 
 
 def mismatch_suspect_ids(dataset_id: int, analysis_id: int) -> Select[tuple[int]]:
-    """Jev가 애매하게 본 지시 불일치 의심 대화 번호들 (따름 0.2 초과 · 0.5 이하, 까닭이 드러난 대화 뺌)."""
+    """Jev가 애매하게 본 지시 불일치 의심 대화 번호들 (따름 0.2 초과 · 0.5 이하, 여러 턴이면 0.5 이하 모두,
+    까닭이 드러난 대화 뺌)."""
     return (
         select(Prompt.id)
         .join(
@@ -137,7 +147,7 @@ def mismatch_suspect_ids(dataset_id: int, analysis_id: int) -> Select[tuple[int]
             Prompt.dataset_id == dataset_id,
             IS_ACTIVE,
             not_(is_kept(CheckKey.MISMATCH)),
-            Judgment.follows > 1 - judging.CONFIRM_PROBABILITY,
+            or_(Judgment.follows > 1 - judging.CONFIRM_PROBABILITY, IS_MULTI_TURN),
             Judgment.follows <= MISMATCH_SUSPECT_FOLLOWS,
             not_(or_(*(Prompt.marks.has_key(key.value) for key in EXPLAINED_MISMATCH))),
         )
@@ -172,6 +182,30 @@ def no_answer_ids(dataset_id: int) -> Select[tuple[int]]:
             IS_ACTIVE,
             not_(HAS_MAIN_ANSWER),
             not_(is_kept(CheckKey.NO_ANSWER)),
+        )
+        .order_by(Prompt.id)
+    )
+
+
+def answer_targets(dataset_id: int) -> Select[tuple[int]]:
+    """응답 만들기의 대상: 응답이 없는 대화 가운데 도구 대화가 아닌 것(호출을 지어내지 않게)."""
+    return no_answer_ids(dataset_id).where(Prompt.tools.is_(None))
+
+
+def pair_targets(dataset_id: int) -> Select[tuple[int]]:
+    """비교 만들기의 대상: 주 응답이 있고 쌍이 하나도 없는(뺀 쌍도 없는) 휴지통 밖 대화, 도구 대화는 뺀다.
+
+    사람이 뺀 쌍이 있는 지시에는 다시 만들지 않는다. 진단의 '쌍 없음'도 이 조건으로 센다.
+    """
+    has_pair = select(Pair.id).where(Pair.prompt_id == Prompt.id).exists()
+    return (
+        select(Prompt.id)
+        .where(
+            Prompt.dataset_id == dataset_id,
+            IS_ACTIVE,
+            HAS_MAIN_ANSWER,
+            Prompt.tools.is_(None),
+            ~has_pair,
         )
         .order_by(Prompt.id)
     )
@@ -222,6 +256,20 @@ def pair_open_ids(dataset_id: int, check: CheckKey) -> Select[tuple[int]]:
     if check == CheckKey.SMALL_MARGIN:
         return judged_pairs(dataset_id).where(func.abs(margin) < SMALL_MARGIN, not_kept)
     return select(Pair.id).where(Pair.id.is_(None))
+
+
+def pair_problems(pair: Pair) -> list[CheckKey]:
+    """쌍 하나에 남은 쌍 검사들 (pair_open_ids와 같은 기준, 사람이 그대로 둔 검사는 뺀다)."""
+    found = []
+    if CheckKey.SAME_PAIR.value in pair.marks:
+        found.append(CheckKey.SAME_PAIR)
+    if pair.judge_chosen is not None and pair.judge_rejected is not None:
+        margin = pair.judge_chosen - pair.judge_rejected
+        if margin <= -REVERSED_MARGIN:
+            found.append(CheckKey.JUDGE_REVERSED)
+        if abs(margin) < SMALL_MARGIN:
+            found.append(CheckKey.SMALL_MARGIN)
+    return [check for check in found if check.value not in pair.kept]
 
 
 def jev_fine_ids(dataset_id: int, analysis_id: int, check: CheckKey) -> Select[tuple[int]]:
@@ -283,6 +331,28 @@ def any_problem(dataset_id: int, *, analysis_id: int | None) -> Any:
         conditions.append(Prompt.id.in_(mismatch_ids(dataset_id, analysis_id).scalar_subquery()))
         conditions.append(Prompt.id.in_(unsafe_ids(dataset_id, analysis_id).scalar_subquery()))
     return or_(*conditions)
+
+
+async def kept_counts(db: AsyncSession, *, dataset_id: int) -> dict[str, int]:
+    """검사마다 '그대로 두기'로 둔 휴지통 밖 대화 · 쌍 수 (진단이 규칙의 오탐을 가늠하게 싣는다)."""
+    # 집합을 내는 함수(jsonb_array_elements_text)는 GROUP BY에 둘 수 없어 안쪽 쿼리로 펼친 뒤 센다.
+    prompt_keys = (
+        select(func.jsonb_array_elements_text(Prompt.kept).label("key"))
+        .where(Prompt.dataset_id == dataset_id, IS_ACTIVE)
+        .subquery()
+    )
+    pair_keys = (
+        select(func.jsonb_array_elements_text(Pair.kept).label("key"))
+        .join(Prompt, Prompt.id == Pair.prompt_id)
+        .where(Pair.dataset_id == dataset_id, PAIR_IS_ACTIVE, IS_ACTIVE)
+        .subquery()
+    )
+    counts: dict[str, int] = {}
+    for keys in (prompt_keys, pair_keys):
+        rows = await db.execute(select(keys.c.key, func.count()).group_by(keys.c.key))
+        for key, count in rows.all():
+            counts[key] = counts.get(key, 0) + int(count)
+    return counts
 
 
 def _ranked(dataset_id: int) -> Any:

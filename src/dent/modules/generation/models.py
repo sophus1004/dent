@@ -175,7 +175,7 @@ class Prompt(Base):
     messages: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
 
     # 대화에서 쓸 수 있는 도구 정의들 [{"name", "description", "parameters"}]. 도구 대화가 아니면 비어 있다.
-    tools: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    tools: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB(none_as_null=True))
 
     # 같은 지시를 찾는 열쇠 (정규화한 맥락 전체의 sha256)
     text_hash: Mapped[str] = mapped_column(String(TEXT_HASH_LENGTH))
@@ -243,7 +243,7 @@ class Response(Base):
     reasoning: Mapped[str | None] = mapped_column(Text)
 
     # 응답이 부른 도구들 [{"id", "type": "function", "function": {"name", "arguments"}}]. 부르지 않았으면 비어 있다.
-    tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB(none_as_null=True))
 
     # SFT에 쓰는 주 응답인지 (원본 → 사람이 고른 것 → Jev 품질 순으로 고른다)
     is_main: Mapped[bool] = mapped_column(server_default=sql_text("true"))
@@ -293,9 +293,10 @@ class Change(Base):
     # 결정: drop · keep · mask · cut · rewrite · flip · answer · pair
     action: Mapped[str] = mapped_column(String(ENUM_MAX_LENGTH))
 
-    # 선호 쌍에 한 결정이면 그 쌍 번호 (뒤집기 · 쌍 빼기 · 비교 만들기). 쌍을 지우면 기록도 지운다.
+    # 선호 쌍에 한 결정이면 그 쌍 번호 (뒤집기 · 쌍 빼기 · 비교 만들기). 쌍이 지워져도(응답 만들기를 되돌림)
+    # 결정 기록은 남긴다(도우미 카드가 되돌린 것으로 보이게).
     pair_id: Mapped[int | None] = mapped_column(
-        ForeignKey("generation_pairs.id", ondelete="CASCADE"), index=True
+        ForeignKey("generation_pairs.id", ondelete="SET NULL"), index=True
     )
 
     # 바꾸기 전 · 후 상태 {"trashed": …, "kept": […], "messages": […], "content": …, "source": …} (바뀐 칸만)

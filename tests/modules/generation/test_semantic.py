@@ -5,7 +5,7 @@ import json
 
 from fastapi import status
 
-from dent.modules.generation import conversations, semantic
+from dent.modules.generation import conversations, problems, semantic
 from tests.modules.generation.helpers import (
     build_analysis,
     connect_models,
@@ -130,6 +130,36 @@ async def test_mismatch_skips_conversations_explained_by_other_checks(client, db
     assert _check(overview, "short")["count"] == 1
     assert _check(overview, "mismatch")["count"] == 1
     assert queue.json()["ids"] == [ids[0]]
+
+
+async def test_mismatch_in_multi_turn_is_only_a_suspect(client, db_session):
+    # 준비: 한 턴 · 여러 턴 대화 모두 마지막 응답이 엉뚱하다(Jev가 '따르지 않음')
+    multi = [
+        {"role": "user", "content": "서울의 인구는?"},
+        {"role": "assistant", "content": "약 940만 명입니다."},
+        {"role": "user", "content": "부산은요?"},
+        {"role": "assistant", "content": "엉뚱한 날씨 이야기입니다."},
+    ]
+    rows = [conversation("파이썬 코드로 정렬해 줘", "엉뚱한 날씨 이야기입니다."), multi]
+    finished = await import_file(db_session, jsonl_bytes(messages_rows(rows)))
+    ids = sorted(await _ids(db_session, finished.dataset_id))
+    await connect_models(db_session)
+
+    # 실행
+    analysis = await build_analysis(
+        db_session, dataset_id=finished.dataset_id, jev_transport=judge_transport()
+    )
+    overview = (await client.get(f"{API}/datasets/{finished.dataset_id}/overview")).json()
+    assert analysis.done is not None
+    suspects = (
+        await db_session.scalars(
+            problems.mismatch_suspect_ids(finished.dataset_id, analysis.done.id)
+        )
+    ).all()
+
+    # 확인: Jev가 앞 턴을 잇는 말을 잘 읽지 못해 여러 턴은 진단에 세지 않고 의심(도우미의 LLM이 본다)으로 둔다
+    assert _check(overview, "mismatch")["count"] == 1
+    assert list(suspects) == [ids[1]]
 
 
 def json_questions(transport) -> set[str]:

@@ -19,7 +19,7 @@ from dent.modules.generation import mapping as mapping_service
 from dent.modules.generation import overview as overview_service
 from dent.modules.generation import semantic as semantic_service
 from dent.modules.generation import service as generation_service
-from dent.modules.generation.rules import CheckKey
+from dent.modules.generation.rules import CHECKS, CheckKey
 from dent.modules.generation.schemas import (
     AnalysisRead,
     AnalysisStateRead,
@@ -37,6 +37,7 @@ from dent.modules.generation.schemas import (
     ExportCreate,
     ExportPreviewRead,
     FieldMappingRead,
+    HelperPermission,
     HelperStateRead,
     HelperUndo,
     HelperUndoRead,
@@ -47,10 +48,12 @@ from dent.modules.generation.schemas import (
     MapTextRead,
     NearPartnerRead,
     OverviewRead,
+    PairDecisionCreate,
     ProblemFilter,
     ReviewQueueRead,
     SettingsRead,
     SettingsUpdate,
+    UnkeepCreate,
 )
 from dent.system import helper as helper_service
 from dent.system.db import get_db
@@ -195,21 +198,59 @@ async def get_conversation(conversation_id: int, db: Db) -> ConversationRead:
     return conversations_service.conversation_read(item)
 
 
+@router.get("/pairs/{pair_id}")
+async def get_pair_conversation(pair_id: int, db: Db) -> ConversationRead:
+    """선호 쌍 하나가 든 대화 (그 지시의 응답 · 쌍 전부)."""
+    item = await conversations_service.get_pair_conversation(db, pair_id=pair_id)
+    return conversations_service.conversation_read(item)
+
+
 @router.get("/datasets/{dataset_id}/review")
-async def get_review_queue(dataset_id: int, check: CheckKey, db: Db) -> ReviewQueueRead:
-    """검토 큐: 한 검사의 문제가 남은 대화 번호들(번호 순)과 전체 수."""
-    ids, total = await conversations_service.review_queue(db, dataset_id=dataset_id, check=check)
-    return ReviewQueueRead(check=check, ids=ids, total=total)
+async def get_review_queue(
+    dataset_id: int, check: CheckKey, db: Db, kept: bool = False
+) -> ReviewQueueRead:
+    """검토 큐: 한 검사의 문제가 남은 번호들(쌍 검사면 쌍 번호, 번호 순)과 전체 수. kept면 그대로 둔 것들."""
+    ids, total = await conversations_service.review_queue(
+        db, dataset_id=dataset_id, check=check, kept=kept
+    )
+    return ReviewQueueRead(check=check, unit=CHECKS[check].unit, ids=ids, total=total)
 
 
 @router.post("/conversations/{conversation_id}/decide")
 async def decide(conversation_id: int, data: DecisionCreate, db: Db) -> DecisionRead:
-    """검토 결정 하나(빼기 · 그대로 두기 · 가리기 · 자르기). 할 수 없는 결정이면 422, 이미 풀렸으면 409."""
+    """검토 결정 하나(빼기 · 그대로 두기 · 가리기 · 자르기 · 다시 쓰기 · 응답 만들기).
+
+    할 수 없는 결정 · LLM 미연결이면 422, 이미 풀렸으면 409, LLM이 답하지 않으면 502.
+    """
     item, change = await conversations_service.decide(db, prompt_id=conversation_id, data=data)
     return DecisionRead(
         conversation=conversations_service.conversation_read(item),
         change=conversations_service.change_read(change),
     )
+
+
+@router.post("/pairs/{pair_id}/decide")
+async def decide_pair(pair_id: int, data: PairDecisionCreate, db: Db) -> DecisionRead:
+    """선호 쌍 결정 하나(쌍 빼기 · 뒤집기 · 그대로 두기). 할 수 없는 결정이면 422, 이미 풀렸으면 409."""
+    item, change = await conversations_service.decide_pair(db, pair_id=pair_id, data=data)
+    return DecisionRead(
+        conversation=conversations_service.conversation_read(item),
+        change=conversations_service.change_read(change),
+    )
+
+
+@router.post("/conversations/{conversation_id}/unkeep")
+async def unkeep_conversation(conversation_id: int, data: UnkeepCreate, db: Db) -> ConversationRead:
+    """'그대로 두기'를 거둬 그 검사로 다시 묻는다. 그대로 둔 검사가 아니면 409."""
+    item = await conversations_service.unkeep(db, prompt_id=conversation_id, check=data.check)
+    return conversations_service.conversation_read(item)
+
+
+@router.post("/pairs/{pair_id}/unkeep")
+async def unkeep_pair(pair_id: int, data: UnkeepCreate, db: Db) -> ConversationRead:
+    """쌍의 '그대로 두기'를 거둬 그 검사로 다시 묻는다. 그대로 둔 검사가 아니면 409."""
+    item = await conversations_service.unkeep_pair(db, pair_id=pair_id, check=data.check)
+    return conversations_service.conversation_read(item)
 
 
 @router.post("/datasets/{dataset_id}/decide-all")
@@ -337,7 +378,7 @@ async def get_helper(dataset_id: int, db: Db) -> HelperStateRead:
 
 @router.post("/datasets/{dataset_id}/helper", status_code=status.HTTP_201_CREATED)
 async def start_helper(dataset_id: int, db: Db) -> HelperRunRead:
-    """도우미 시작. 뜻 분석이 없거나 오래됐으면 먼저 다시 만든다. LLM이 없으면 422, 이미 도는 중이면 409."""
+    """도우미 시작. 뜻 분석이 없거나 오래됐으면 먼저 다시 만든다. LLM이 없으면 422, 도는 중 · 허락을 기다리면 409."""
     run = await helper_agent.start_helper(db, dataset_id=dataset_id)
     return HelperRunRead.model_validate(run)
 
@@ -349,6 +390,13 @@ async def undo_helper(run_id: int, db: Db, data: HelperUndo | None = None) -> He
         db, run_id=run_id, event_id=data.event_id if data is not None else None
     )
     return HelperUndoRead(reverted=result.reverted, skipped=result.skipped)
+
+
+@router.post("/helper/{run_id}/permission")
+async def answer_helper_permission(run_id: int, data: HelperPermission, db: Db) -> HelperRunRead:
+    """허락에 답한다 (응답 만들기 · 비교 만들기). 기다리는 중이 아니면 409."""
+    run = await helper_agent.answer_permission(db, run_id=run_id, approve=data.approve)
+    return HelperRunRead.model_validate(run)
 
 
 @router.get("/datasets/{dataset_id}/helper/left")

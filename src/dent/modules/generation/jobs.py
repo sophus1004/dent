@@ -153,11 +153,16 @@ async def run_helper_job(
     transport · jev_transport는 테스트가 서버 대신 가짜 응답을 줄 때만.
     """
     run_id = int(job.params["run_id"])
+    resume = job.params.get("resume")
+    continue_from = job.params.get("continue_from")
     try:
         async with get_sessionmaker()() as session:
             await helper.run_helper(
                 session,
                 run_id=run_id,
+                resume=str(resume) if resume else None,
+                approved=bool(job.params.get("approved", False)),
+                continue_from=str(continue_from) if continue_from else None,
                 transport=transport,
                 jev_transport=jev_transport,
                 fix=[str(key) for key in job.params["fix"]] if "fix" in job.params else None,

@@ -445,7 +445,8 @@ def tool_problems(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | 
             for call in message.get("tool_calls") or []:
                 if _call_problem(call, defined):
                     bad.append(turn)
-                elif call.get("id") and turn != last:
+                # 틀린 호출도 번호를 적어 둔다(그 결과를 '가리키는 호출 없음'으로 한 번 더 세지 않게).
+                if call.get("id") and turn != last:
                     open_calls[str(call["id"])] = turn
         elif message["role"] == Role.TOOL:
             call_id = message.get("tool_call_id")

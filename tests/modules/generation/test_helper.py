@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from dent.modules.generation import helper
 from dent.modules.generation.jobs import run_analysis_job, run_helper_job
+from dent.modules.generation.models import Pair, Response
 from dent.modules.generation.rules import CheckKey
 from dent.system.agent import BLOCKED_MESSAGE
 from dent.system.models import HelperEvent, Job
@@ -217,7 +218,7 @@ async def test_gate_blocks_response_stage_when_instruction_stage_stays_bad(
 
     # 확인: 응답 단계의 첫 단계에서 막히고, 루프는 자르지 않았다
     assert state["run"]["error"] == BLOCKED_MESSAGE
-    blocked = next(step for step in state["run"]["steps"] if step["key"] == "empty_answer")
+    blocked = next(step for step in state["run"]["steps"] if step["key"] == "no_answer")
     assert blocked["status"] == "blocked"
     assert _check(overview, "loop")["count"] == 1
 
@@ -295,3 +296,116 @@ async def test_start_helper_returns_422_without_llm_and_fix_422_for_unfixable(cl
     # 확인
     assert no_llm.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert unfixable.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+# ---------- 응답 만들기 · 비교 만들기 (허락) ----------
+
+
+async def _wait_permission(client, dataset_id: int) -> dict:
+    state = (await client.get(f"{API}/datasets/{dataset_id}/helper")).json()
+    assert state["run"]["status"] == "asking", " | ".join(
+        f"{row['key']}:{row['status']}:{row.get('plan')}" for row in state["run"]["steps"]
+    ) + str(state["run"].get("error"))
+    return state["run"]
+
+
+async def test_answer_step_asks_with_trial_then_writes_answers_after_approval(client, db_session):
+    # 준비: 응답이 없는 지시 둘
+    prompts = [
+        {"messages": [{"role": "user", "content": "서울을 소개해 줘"}]},
+        {"messages": [{"role": "user", "content": "부산을 소개해 줘"}]},
+    ]
+    dataset_id = (await import_file(db_session, jsonl_bytes(prompts), name="지시만")).dataset_id
+    await connect_models(db_session, llm=True)
+    llm = fake_llm()
+
+    # 실행: 허락을 묻는 데까지 돌고, 허락한 뒤 끝까지 돈다
+    run_id = (await client.post(f"{API}/datasets/{dataset_id}/helper")).json()["id"]
+    await _run_queued(db_session, dataset_id, llm=llm)
+    asking = await _wait_permission(client, dataset_id)
+    before = (await client.get(f"{API}/datasets/{dataset_id}/overview")).json()
+    approved = await client.post(f"{API}/helper/{run_id}/permission", json={"approve": True})
+    await _run_queued(db_session, dataset_id, llm=llm)
+    state = (await client.get(f"{API}/datasets/{dataset_id}/helper")).json()
+    after = (await client.get(f"{API}/datasets/{dataset_id}/overview")).json()
+    items = (await client.get(f"{API}/datasets/{dataset_id}/conversations")).json()["items"]
+
+    # 확인: 시험 · 비용을 싣고 기다리는 동안은 넣지 않으며, 허락 뒤 모두 만들고 보고로 끝난다
+    facts = dict(asking["permission"]["facts"])
+    assert asking["permission"]["step"] == "no_answer"
+    assert facts["시험"] == "지시 2 → 통과 2 / 2"
+    assert before["unanswered"] == 2
+    assert approved.status_code == status.HTTP_200_OK
+    assert state["run"]["status"] == "done"
+    assert after["unanswered"] == 0
+    assert {item["source"] for item in items} == {"synthetic"}
+    assert {item["messages"][-1]["content"] for item in items} == {REWRITTEN}
+
+
+async def test_declined_answer_step_is_skipped_and_run_finishes(client, db_session):
+    # 준비
+    prompts = [{"messages": [{"role": "user", "content": "서울을 소개해 줘"}]}]
+    dataset_id = (await import_file(db_session, jsonl_bytes(prompts), name="지시만")).dataset_id
+    await connect_models(db_session, jev=False, llm=True)
+    run_id = (await client.post(f"{API}/datasets/{dataset_id}/helper")).json()["id"]
+    await _run_queued(db_session, dataset_id, llm=fake_llm())
+
+    # 실행
+    await client.post(f"{API}/helper/{run_id}/permission", json={"approve": False})
+    await _run_queued(db_session, dataset_id, llm=fake_llm())
+    again = await client.post(f"{API}/helper/{run_id}/permission", json={"approve": True})
+    state = (await client.get(f"{API}/datasets/{dataset_id}/helper")).json()
+
+    # 확인: 건너뛴 단계로 적고 끝나며, 다시 답하면 409
+    step = next(row for row in state["run"]["steps"] if row["key"] == "no_answer")
+    assert (step["status"], step["plan"]) == ("skipped", "건너뜀")
+    assert state["run"]["status"] == "done"
+    assert again.status_code == status.HTTP_409_CONFLICT
+
+
+async def test_pair_step_makes_judged_pairs_for_preference_goal(client, db_session):
+    # 준비: 응답이 있는 대화 둘, 만들 데이터를 선호로
+    rows = [
+        conversation("감자 레시피를 알려줘", "감자를 삶아 으깹니다."),
+        conversation("파이썬 코드로 정렬하는 법은?", "sorted() 함수를 씁니다."),
+    ]
+    dataset_id = await _dataset(db_session, rows)
+    await connect_models(db_session, llm=True)
+    await client.patch(f"{API}/datasets/{dataset_id}/settings", json={"goal": "preference"})
+    llm = fake_llm()
+
+    # 실행
+    run_id = (await client.post(f"{API}/datasets/{dataset_id}/helper")).json()["id"]
+    await _run_queued(db_session, dataset_id, llm=llm)
+    asking = await _wait_permission(client, dataset_id)
+    await client.post(f"{API}/helper/{run_id}/permission", json={"approve": True})
+    await _run_queued(db_session, dataset_id, llm=llm)
+    overview = (await client.get(f"{API}/datasets/{dataset_id}/overview")).json()
+    pairs = (await db_session.scalars(select(Pair))).all()
+
+    # 확인: 지시마다 쌍 하나(출처 합성), Jev 점수가 같아 주 응답을 고르고 작은 마진으로 알린다
+    assert asking["permission"]["step"] == "pairs"
+    assert (overview["pairs"], overview["unpaired"]) == (2, 0)
+    assert {pair.source for pair in pairs} == {"synthetic"}
+    assert all(pair.judge_chosen is not None for pair in pairs)
+    assert _check(overview, "small_margin")["count"] == 2
+
+
+async def test_undo_helper_run_removes_made_pairs(client, db_session):
+    # 준비: 비교 만들기까지 한 실행
+    dataset_id = await _dataset(db_session, [conversation("서울의 인구는?", "약 940만 명입니다.")])
+    await connect_models(db_session, llm=True)
+    await client.patch(f"{API}/datasets/{dataset_id}/settings", json={"goal": "preference"})
+    run_id = (await client.post(f"{API}/datasets/{dataset_id}/helper")).json()["id"]
+    await _run_queued(db_session, dataset_id, llm=fake_llm())
+    await client.post(f"{API}/helper/{run_id}/permission", json={"approve": True})
+    await _run_queued(db_session, dataset_id, llm=fake_llm())
+
+    # 실행
+    undone = await client.post(f"{API}/helper/{run_id}/undo", json={})
+    overview = (await client.get(f"{API}/datasets/{dataset_id}/overview")).json()
+
+    # 확인: 쌍과 만든 응답이 지워져 다시 쌍 없음
+    assert undone.json()["reverted"] >= 1
+    assert (overview["pairs"], overview["unpaired"]) == (0, 1)
+    assert await db_session.scalar(select(Response.id).where(~Response.is_main)) is None

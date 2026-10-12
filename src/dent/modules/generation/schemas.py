@@ -40,8 +40,8 @@ ProblemFilter = CheckKey | Literal["any", "none"]
 # 등급
 Grade = Literal["good", "warn", "bad"]
 
-# 내보낼 파일 모양 (첫 판: TRL messages jsonl)
-ExportFormat = Literal["sft_jsonl"]
+# 내보낼 파일 모양: SFT 대화 · 선호 쌍(DPO) · 지시만(GRPO 같은 온라인 학습), 모두 TRL이 읽는 jsonl
+ExportFormat = Literal["sft_jsonl", "dpo_jsonl", "prompts_jsonl"]
 
 
 # ---------- 데이터셋 ----------
@@ -299,6 +299,9 @@ class CheckRead(BaseModel):
     # 분모가 표본인지 (안전처럼 앞 몇천 건만 Jev에 물은 검사)
     sampled: bool = False
 
+    # 사람 · 도우미가 '그대로 두기'로 둔 수 (많으면 규칙의 오탐을 의심한다)
+    kept: int = 0
+
     # 등급
     grade: Grade
 
@@ -394,11 +397,69 @@ class ProblemRead(BaseModel):
 class MessageRead(BaseModel):
     """대화의 메시지 하나."""
 
-    # 역할: system · user · assistant
+    # 역할: system · user · assistant · tool
     role: str
 
     # 글
     content: str
+
+    # 응답이 부른 도구들 (부르지 않았으면 null)
+    tool_calls: list[dict[str, Any]] | None = None
+
+    # 도구 결과가 답하는 호출 번호 (tool 메시지만)
+    tool_call_id: str | None = None
+
+
+class AnswerRead(BaseModel):
+    """지시의 응답 하나 (주 응답 · 선호 쌍의 다른 응답)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    # 응답 번호
+    id: int
+
+    # 응답 글
+    content: str
+
+    # 응답이 부른 도구들
+    tool_calls: list[dict[str, Any]] | None
+
+    # 출처: original · synthetic · human
+    source: str
+
+    # SFT에 쓰는 주 응답인지
+    is_main: bool
+
+    # 원본 점수 (없으면 null)
+    score: float | None
+
+
+class PairRead(BaseModel):
+    """선호 쌍 하나: 고른 응답 · 버린 응답 번호, Jev 판정, 남은 쌍 문제."""
+
+    # 쌍 번호
+    id: int
+
+    # 대화(지시) 번호
+    prompt_id: int
+
+    # 고른 응답 · 버린 응답 번호 (대화의 answers 안)
+    chosen_id: int
+    rejected_id: int
+
+    # 출처: original(가져온 쌍) · synthetic(비교 만들기)
+    source: str
+
+    # Jev가 응답마다 본 '지시를 따른다' 확률 (묻지 않았으면 null)
+    judge_chosen: float | None
+    judge_rejected: float | None
+
+    # 남은 쌍 문제 · 사람이 '그대로 두기'로 둔 쌍 검사
+    problems: list[CheckKey]
+    kept: list[CheckKey]
+
+    # 뺀 쌍인지 (학습에서 빠진다)
+    trashed: bool
 
 
 class JevRead(BaseModel):
@@ -413,6 +474,9 @@ class JevRead(BaseModel):
     # 지시 ↔ 응답 뜻 유사도 (지시 불일치 후보를 고른 값)
     similarity: float | None
 
+    # 응답이 해롭다 (안전 표본에 든 대화만)
+    unsafe: float | None = None
+
     # Jev가 규칙의 문제(거절 · 짧은 응답)를 괜찮다고 봤는지(지시를 따른다고 확인) → 검토가 [그대로 두기]를 권한다
     looks_fine: bool
 
@@ -426,8 +490,18 @@ class ConversationRead(BaseModel):
     # 데이터셋 번호
     dataset_id: int
 
-    # 메시지들 (맥락 · 마지막 응답까지)
+    # 메시지들 (맥락 · 주 응답까지. 응답이 없으면 맥락만)
     messages: list[MessageRead]
+
+    # 주 응답이 있는지 (없으면 지시만: 응답 만들기로 채운다)
+    has_answer: bool
+
+    # 응답들 (주 응답이 앞) · 선호 쌍들
+    answers: list[AnswerRead]
+    pairs: list[PairRead]
+
+    # 대화에서 쓸 수 있는 도구 정의들 (도구 대화가 아니면 null)
+    tools: list[dict[str, Any]] | None
 
     # 출처: original · synthetic · human (응답을 LLM이 다시 썼으면 synthetic)
     source: str
@@ -473,12 +547,15 @@ class ConversationPageRead(BaseModel):
 
 
 class ReviewQueueRead(BaseModel):
-    """검토 큐: 한 검사의 문제가 남은 대화 번호들(번호 순)."""
+    """검토 큐: 한 검사의 문제가 남은 대화(쌍 검사면 쌍) 번호들(번호 순). kept면 그대로 둔 것들."""
 
     # 검사 이름
     check: CheckKey
 
-    # 대화 번호들 (최대 REVIEW_MAX개)
+    # 번호의 단위: conversation(대화) · pair(선호 쌍)
+    unit: Literal["conversation", "pair"]
+
+    # 번호들 (최대 REVIEW_MAX개)
     ids: list[int]
 
     # 문제가 남은 전체 수
@@ -491,8 +568,32 @@ class DecisionCreate(BaseModel):
     # 검사 이름
     check: CheckKey
 
-    # 결정: drop · keep · mask · cut · rewrite (rewrite는 LLM이 연결돼 있어야 한다)
+    # 결정: drop · keep · mask · cut · rewrite · answer (rewrite · answer는 LLM이 연결돼 있어야 한다)
     action: Action
+
+
+class PairDecisionCreate(BaseModel):
+    """선호 쌍 검토 결정 하나."""
+
+    # 쌍 검사 이름
+    check: CheckKey
+
+    # 결정: drop(쌍 빼기) · flip(뒤집기) · keep(그대로 두기)
+    action: Literal["drop", "flip", "keep"]
+
+
+class HelperPermission(BaseModel):
+    """도우미의 허락에 답한다(응답 만들기 · 비교 만들기)."""
+
+    # 허락하면 true, 건너뛰면 false
+    approve: bool
+
+
+class UnkeepCreate(BaseModel):
+    """'그대로 두기'를 거둔다(그 검사로 다시 묻는다)."""
+
+    # 검사 이름
+    check: CheckKey
 
 
 class DecideAllCreate(BaseModel):
@@ -518,6 +619,9 @@ class ChangeRead(BaseModel):
 
     # 대화 번호
     prompt_id: int
+
+    # 쌍에 한 결정이면 쌍 번호
+    pair_id: int | None = None
 
     # 검사 이름
     check_key: str | None
@@ -695,8 +799,14 @@ class ExportFileRead(BaseModel):
     # 파일 이름
     file_name: str
 
-    # 넣을 대화 수
+    # 넣을 줄 수 (대화 · 쌍 · 지시)
     conversations: int
+
+    # 줄의 단위: conversation(SFT 대화 · 지시) · pair(선호 쌍)
+    unit: Literal["conversation", "pair"] = "conversation"
+
+    # 이 파일을 막는 심각이 있는지 (지시만 파일은 지시 단계의 심각만 본다)
+    blocked: bool = False
 
 
 class ExportCheckRead(BaseModel):
