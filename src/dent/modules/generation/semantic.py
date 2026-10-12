@@ -618,12 +618,13 @@ async def _texts_for(db: AsyncSession, *, rows: Rows, text_hashes: Sequence[str]
     """
     owner_ids = sorted({rows.owners[text_hash][0] for text_hash in text_hashes})
     found: dict[int, tuple[list[dict[str, Any]], str]] = {}
+    # _rows와 같은 대화 모양: 주 응답만(선호 쌍의 다른 응답이 아니라), 응답이 없으면 빈 글(지시만).
     for prompt_id, messages, content in await db.execute(
         select(Prompt.id, Prompt.messages, Response.content)
-        .join(Response, Response.prompt_id == Prompt.id)
+        .outerjoin(Response, and_(Response.prompt_id == Prompt.id, Response.is_main))
         .where(Prompt.id.in_(owner_ids))
     ):
-        found[prompt_id] = (messages, content)
+        found[prompt_id] = (messages, content or "")
     texts = []
     for text_hash in text_hashes:
         prompt_id, is_response = rows.owners[text_hash]

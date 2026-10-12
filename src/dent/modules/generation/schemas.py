@@ -62,7 +62,7 @@ class DatasetSummaryRead(BaseModel):
     # 휴지통에 없는 대화 수
     conversation_count: int
 
-    # 문제가 남은 대화 수 (같은 지시는 빼고 센다. 진단의 검사별 수와 다를 수 있다)
+    # 문제가 남은 대화 수: 남은 글 검사 · 응답 없음 · 쌍 문제(같은 쌍 · 동점). 같은 지시 · 뜻 검사는 빼고 센다(진단의 수와 다를 수 있다)
     problem_count: int
 
     # 휴지통에 있는 대화 수

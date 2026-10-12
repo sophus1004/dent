@@ -162,6 +162,47 @@ async def test_mismatch_in_multi_turn_is_only_a_suspect(client, db_session):
     assert list(suspects) == [ids[1]]
 
 
+async def test_analysis_builds_for_prompts_without_answer_and_preference_pairs(db_session):
+    # 준비: 지시만 데이터 · 선호 쌍 데이터(지시마다 응답 둘)
+    prompts = await import_file(
+        db_session,
+        jsonl_bytes([{"messages": [{"role": "user", "content": "서울의 인구는?"}]}]),
+        name="지시만",
+    )
+    pairs = await import_file(
+        db_session,
+        jsonl_bytes(
+            [
+                {
+                    "chosen": [
+                        {"role": "user", "content": "김치찌개 레시피 알려줘"},
+                        {"role": "assistant", "content": "레시피: 김치를 볶고 물을 붓습니다."},
+                    ],
+                    "rejected": [
+                        {"role": "user", "content": "김치찌개 레시피 알려줘"},
+                        {"role": "assistant", "content": "엉뚱한 날씨 이야기입니다."},
+                    ],
+                }
+            ]
+        ),
+        name="선호",
+        mapping={"shape": "preference", "chosen": "chosen", "rejected": "rejected"},
+    )
+    await connect_models(db_session)
+
+    # 실행
+    first = await build_analysis(
+        db_session, dataset_id=prompts.dataset_id, jev_transport=judge_transport()
+    )
+    second = await build_analysis(
+        db_session, dataset_id=pairs.dataset_id, jev_transport=judge_transport()
+    )
+
+    # 확인: 둘 다 다 만든다(주 응답만 임베딩하고, 응답이 없으면 지시만)
+    assert first.done is not None and first.run is None
+    assert second.done is not None and second.run is None
+
+
 def json_questions(transport) -> set[str]:
     """가짜 Jev가 받은 질문 이름들."""
     return {

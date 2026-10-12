@@ -9,7 +9,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import ColumnElement, exists, func, select
+from sqlalchemy import ColumnElement, and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dent.modules.generation.models import (
@@ -22,6 +22,7 @@ from dent.modules.generation.models import (
     Prompt,
     Response,
 )
+from dent.modules.generation.rules import CheckKey
 from dent.modules.generation.schemas import ImportCreate
 from dent.system import datasets as datasets_service
 from dent.system import imports as imports_service
@@ -49,6 +50,17 @@ HAS_MAIN_ANSWER = exists().where(Response.prompt_id == Prompt.id, Response.is_ma
 
 # 휴지통 밖 선호 쌍 (지시도 휴지통 밖이어야 한다. 쌍 조건은 Prompt와 이어 쓴다)
 PAIR_IS_ACTIVE = Pair.trashed_at.is_(None)
+
+# 응답 만들기가 남은 대화 (응답이 없고 '그대로 두기'로 두지 않은 것). 목록의 '문제' 수에 든다.
+NEEDS_ANSWER = and_(~HAS_MAIN_ANSWER, ~Prompt.kept.contains([CheckKey.NO_ANSWER.value]))
+
+# 글의 표시로 잰 쌍 문제(같은 쌍 · 동점)가 남은 대화. 목록의 '문제' 수에 든다.
+HAS_PAIR_PROBLEM = exists().where(
+    Pair.prompt_id == Prompt.id,
+    PAIR_IS_ACTIVE,
+    Pair.marks.has_key(CheckKey.SAME_PAIR.value),
+    ~Pair.kept.contains([CheckKey.SAME_PAIR.value]),
+)
 
 
 def has_open(key: str) -> ColumnElement[bool]:
@@ -165,7 +177,7 @@ async def _summarize(db: AsyncSession, datasets: list[Dataset]) -> list[DatasetS
         select(
             Prompt.dataset_id,
             func.count().filter(IS_ACTIVE),
-            func.count().filter(IS_ACTIVE, HAS_OPEN_CHECKS),
+            func.count().filter(IS_ACTIVE, or_(HAS_OPEN_CHECKS, NEEDS_ANSWER, HAS_PAIR_PROBLEM)),
             func.count().filter(IS_TRASHED),
         )
         .where(Prompt.dataset_id.in_(dataset_ids))
