@@ -72,10 +72,11 @@ def _message(content: str, tool_calls: list[dict[str, Any]] | None = None) -> ht
     )
 
 
-def fake_llm() -> httpx.MockTransport:
+def fake_llm(*, echo: bool = False) -> httpx.MockTransport:
     """가짜 LLM (OpenAI 모양). 단계는 '지금 단계: … (열쇠)'로 알아본다:
     짧은 응답은 보기를 모두 빼고, 지시 불일치는 보류하고, 거절은 그대로 둔다. 도구 결과를 받으면 finish_step.
     도구 없는 요청: 보고는 두 줄, 다시 쓰기는 REWRITTEN.
+    echo면 판단 도구의 say를 답 본문에도 빈 줄로 띄워 넣는다(실제 LLM이 그랬다).
     """
     requests: list[dict[str, Any]] = []
 
@@ -99,7 +100,9 @@ def fake_llm() -> httpx.MockTransport:
         if key == "short":
             return _message("", [_call("drop", "답이 엉뚱한가?\n뺀다.", refs=refs)])
         if key == "mismatch":
-            return _message("", [_call("hold", "갈리나?\n사람이 본다.", refs=refs)])
+            say = "갈리나?\n사람이 본다."
+            content = say.replace("\n", "\n\n") if echo else ""
+            return _message(content, [_call("hold", say, refs=refs)])
         if key == "refusal":
             return _message("", [_call("keep", "마땅한가?\n둔다.", refs=refs)])
         return _message("", [_call("finish_step", "끝.")])
@@ -166,6 +169,32 @@ async def test_helper_runs_rules_first_then_llm_and_reports(client, db_session):
     assert {item["key"]: item["group"] for item in left}["truncated"] == "ai"
     assert "report" in kinds
     assert state["run"]["held"] == 1
+    # 보고를 두 줄로 말하게 할 때 처음 · 끝을 더하지 않게 '처음 → 끝' 글로 준다.
+    report_request = next(
+        body for body in llm.requests if "보고를 두 줄로" in body["messages"][0]["content"]
+    )
+    facts = json.loads(report_request["messages"][1]["content"])
+    assert re.fullmatch(r"\d+ → \d+", facts["심각 검사 수 (처음 → 끝)"])
+
+
+async def test_helper_writes_a_say_once_when_llm_echoes_it_with_blank_lines(client, db_session):
+    # 준비: LLM이 판단 도구의 say를 답 본문에도 빈 줄로 띄워 넣는다.
+    dataset_id = await _dataset(db_session)
+    await connect_models(db_session, llm=True)
+    run_id = (await client.post(f"{API}/datasets/{dataset_id}/helper")).json()["id"]
+
+    # 실행
+    await _run_queued(db_session, dataset_id, llm=fake_llm(echo=True))
+
+    # 확인: 지시 불일치 단계의 말이 한 번씩만 적힌다.
+    says = [
+        event.payload["text"]
+        for event in await db_session.scalars(
+            select(HelperEvent).where(HelperEvent.run_id == run_id, HelperEvent.kind == "say")
+        )
+    ]
+    assert says.count("갈리나?") == 1
+    assert says.count("사람이 본다.") == 1
 
 
 async def test_gate_blocks_response_stage_when_instruction_stage_stays_bad(

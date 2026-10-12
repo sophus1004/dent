@@ -76,6 +76,11 @@ QUESTION_TYPES = tuple(kind for kind in QUERY_TYPES if kind != KEYWORD_TYPE)
 # 검색어형 · 질문형을 고르게 섞는 수열의 걸음(황금비의 소수 부분). 청크 몇 개만 모여도 몫이 설정에 가깝다.
 MIX_STEP = 0.6180339887
 QUERY_LENGTHS = ("5낱말 미만", "5~10낱말", "10낱말 넘게")
+# 검색어형은 사람이 검색창에 치는 길이로 따로 둔다. 질문형과 같은 길이를 주었더니 '10낱말 넘게'에서
+# 청크의 낱말을 열 개 넘게 늘어놓은 검색어(너무 쉬운 쌍)가 나왔다.
+KEYWORD_LENGTHS = ("2~3낱말", "3~5낱말", "5~7낱말")
+# 이보다 낱말이 많은 검색어형은 모양으로 거른다(설정을 어긴 것)
+KEYWORD_MAX_WORDS = 8
 QUERY_DIFFICULTIES = ("쉬움", "보통", "어려움")
 
 # 예시로 보이는 원본 질의 수와 고를 때 읽는 수
@@ -385,8 +390,11 @@ async def generate(
         label = document.title or document.text[:40]
         passed: list[tuple[str, Spec, Verdict]] = []
         for text, spec in zip(texts, specs, strict=False):
-            verdict = await filters.check(text, document, outcome=outcome)
-            verdict = await filters.relabel(verdict, text, outcome=outcome)
+            if is_too_long_keyword(text, spec.kind):
+                verdict = Verdict(reason=REASON_SHAPE)
+            else:
+                verdict = await filters.check(text, document, outcome=outcome)
+                verdict = await filters.relabel(verdict, text, outcome=outcome)
             if verdict.reason is None and verdict.is_easy and not filters.easy_allowed():
                 verdict = Verdict(reason=REASON_EASY)
             if verdict.reason is not None:
@@ -515,6 +523,11 @@ def _sample(outcome: Outcome, text: str, label: str, *, passed: bool, reason: st
 # ---------- 안에서만 쓰는 것 ----------
 
 
+def is_too_long_keyword(text: str, kind: str) -> bool:
+    """검색어형인데 낱말이 KEYWORD_MAX_WORDS보다 많은지 (청크의 낱말을 늘어놓은 검색어)."""
+    return kind == KEYWORD_TYPE and len(text.split()) > KEYWORD_MAX_WORDS
+
+
 def _specs(document: Document, *, count: int, offset: int, question_share: int) -> list[Spec]:
     """청크의 후보 설정 count개 (자리 offset부터). 해시로 시작을 정하고 자리마다 돌려서, 다시 해도 같다.
 
@@ -530,10 +543,11 @@ def _specs(document: Document, *, count: int, offset: int, question_share: int) 
         kind = (
             QUESTION_TYPES[(digest + slot) % len(QUESTION_TYPES)] if is_question else KEYWORD_TYPE
         )
+        lengths = QUERY_LENGTHS if is_question else KEYWORD_LENGTHS
         specs.append(
             Spec(
                 kind=kind,
-                length=QUERY_LENGTHS[(digest // len(QUERY_TYPES) + slot) % len(QUERY_LENGTHS)],
+                length=lengths[(digest // len(QUERY_TYPES) + slot) % len(lengths)],
                 difficulty=QUERY_DIFFICULTIES[(digest // 7 + slot) % len(QUERY_DIFFICULTIES)],
             )
         )

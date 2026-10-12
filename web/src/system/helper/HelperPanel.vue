@@ -93,6 +93,9 @@ const PANEL_MAX_REM = 28.75
 const PANEL_SHARE = PANEL_MIN_REM / (MAIN_MIN_REM + PANEL_MIN_REM)
 // 겹쳐서 접었을 때의 레일 폭 (rem, 클래스 w-13과 같다)
 const RAIL_REM = 3.25
+// 진행 줄에 번호 점(22px)으로 다 들어가는 단계 수 (창이 가장 좁을 때 23rem 기준).
+// AI로 고치기를 여러 번 하면 단계가 늘어 점이 창 밖으로 넘쳤다. 넘으면 번호 없는 작은 점으로, 줄을 바꿔 가며 보인다.
+const FULL_DOT_LIMIT = 14
 
 const STATE_WORDS: Record<string, { word: string; tone: string }> = {
   running: { word: '돌리는 중', tone: 'text-accent-foreground bg-accent' },
@@ -507,7 +510,16 @@ function deltaGrade(step: HelperStep): Grade {
       </div>
     </div>
 
-    <div v-if="run" class="flex items-center px-4 pt-2.5 pb-0.5" aria-label="진행">
+    <div v-if="run && run.steps.length > FULL_DOT_LIMIT" class="flex flex-wrap gap-1.5 px-4 pt-3 pb-1" aria-label="진행">
+      <span
+        v-for="step in run.steps"
+        :key="step.key"
+        class="size-2 rounded-full"
+        :class="railDotTone(step.status)"
+        :title="step.title"
+      />
+    </div>
+    <div v-else-if="run" class="flex items-center px-4 pt-2.5 pb-0.5" aria-label="진행">
       <template v-for="(step, index) in run.steps" :key="step.key">
         <span
           class="grid size-[22px] shrink-0 place-items-center rounded-full text-[11px] font-bold"

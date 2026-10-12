@@ -173,9 +173,10 @@ STEPS: tuple[StepDef, ...] = (
         CheckKey.REFUSAL,
         2,
         "jev_keep",
-        "이 거절 · 상투구가 문제인가?\nJev가 마땅한 거절이나 지시를 따른 답으로 본 것은 그대로 둔다.",
-        "규칙이 거절 · 상투구로 잡은 대화 가운데 Jev도 괜찮다고 하지 않은 것이 남았다. 해롭거나 할 수 없는 요청을 "
-        "거절한 것이면 keep, 멀쩡한 요청을 거절했거나 'AI 언어 모델로서' 같은 상투구만 있으면 drop.",
+        "이 거절 · 상투구가 문제인가?\nJev가 지시를 따른 답으로 확인한 것은 그대로 둔다.",
+        "규칙이 거절 · 상투구로 잡은 대화 가운데 Jev가 지시를 따른다고 확인하지 않은 것이 남았다. 해롭거나 할 수 없는 "
+        "요청을 거절한 것이면 keep, 멀쩡한 요청을 거절했거나 'AI 언어 모델로서' 같은 상투구만 있으면 drop. "
+        "Jev의 '마땅한 거절' 점수는 참고만 한다(멀쩡한 요청의 거절에도 높게 줄 때가 있다).",
     ),
     StepDef(
         CheckKey.SHORT,
@@ -560,7 +561,10 @@ class Helper(Agent):
             ref = f"r{index}"
             state.refs[ref] = item.prompt.id
             follows = item.judgment.follows if item.judgment else None
+            refusal_ok = item.judgment.refusal_ok if item.judgment else None
             jev = f" · Jev 따름 {follows:.2f}" if follows is not None else ""
+            if refusal_ok is not None:
+                jev += f" · Jev 마땅한 거절 {refusal_ok:.2f}"
             instruction = _last_user(item.prompt.messages)[:INSTRUCTION_PREVIEW]
             answer = item.answer.content[:RESPONSE_PREVIEW]
             lines.append(f'{ref} 지시 "{instruction}"\n   응답 "{answer}"{jev}')

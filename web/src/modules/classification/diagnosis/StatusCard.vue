@@ -2,7 +2,7 @@
   종합 상태 카드 (진단 탭 맨 위):
     머리   종합 상태(준비 안 됨 · 확인 필요 · 준비됨) · 심각 n · 주의 n · 통과 n · 검사 n종(글자 5 · 뜻 3) · 대상 · 진단 시각
            [<가장 급한 검사> n건 보기] · [모든 문장 보기]
-    잠김   한 줄: 다음 할 일(LLM 미연결) · jev 평가(라벨 불일치 · 뜻 모호, 준비 중) · [연결 설정]
+    잠김   한 줄: 다음 할 일(LLM 연결 상태, 준비 중) · jev 평가(라벨 불일치 · 뜻 모호, 준비 중) · [연결 설정]
   종합 상태는 새 점수를 만들지 않고 검사 등급만 센다: 심각이 하나라도 있으면 준비 안 됨, 주의만 있으면 확인 필요.
   뜻 검사는 뜻 분석이 있을 때만 센다(없으면 검사 5종).
   검사 표는 이 카드 아래의 글자 검사 · 뜻 검사 카드(CheckGroup)에 있다.
@@ -31,7 +31,8 @@ const props = defineProps<{
 
 const route = useRoute()
 
-// Jev가 연결됐는지 (/readyz). 연결돼도 jev 평가는 아직 만들지 않아 잠겨 있다.
+// LLM · Jev가 연결됐는지 (/readyz). 연결돼도 다음 할 일 · jev 평가는 아직 만들지 않아 잠겨 있다.
+const llmConnected = computed(() => isConnected('llm'))
 const jevConnected = computed(() => isConnected('jev'))
 
 const overall = computed(() => overallStatus(props.checks))
@@ -113,7 +114,10 @@ const firstProblem = computed(() => {
       <span class="inline-flex items-center gap-1.5 whitespace-nowrap">
         <ListChecks class="size-3.5" /><b class="text-ui font-semibold text-foreground">다음 할 일</b>
         · LLM
-        <span class="size-1.5 rounded-full ring-[1.5px] ring-subtle-foreground ring-inset" />미연결
+        <span
+          class="size-1.5 rounded-full"
+          :class="llmConnected ? 'bg-success' : 'ring-[1.5px] ring-subtle-foreground ring-inset'"
+        />{{ llmConnected ? '연결됨' : '미연결' }} · 준비 중
       </span>
       <span class="text-border-strong">·</span>
       <span class="inline-flex items-center gap-1.5 whitespace-nowrap">

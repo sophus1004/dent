@@ -471,11 +471,13 @@ class Agent:
 
     async def say_once(self, text: str | None, *, said: set[str]) -> None:
         """한 응답 안에서 아직 하지 않은 말이면 말한다. LLM이 답 본문과 도구의 say에, 또는 한 번에 부른
-        여러 도구에 같은 말을 넣곤 해서 창에 같은 말이 두 번씩 적혔다."""
-        line = (text or "").strip()
-        if line and line not in said:
-            said.add(line)
-            await self.say(line)
+        여러 도구에 같은 말을 넣곤 해서 창에 같은 말이 두 번씩 적혔다. 줄 사이 빈 줄 · 공백만 다른 것도
+        같은 말로 본다(실제 LLM이 답 본문은 빈 줄로, say는 줄바꿈 하나로 띄웠다)."""
+        lines = (part.strip() for part in re.split(r"\n+", text or ""))
+        normalized = "\n".join(line for line in lines if line)
+        if normalized and normalized not in said:
+            said.add(normalized)
+            await self.say(normalized)
 
     async def emit(self, kind: HelperEventKind, payload: dict[str, Any]) -> None:
         """사건 하나를 적고 바로 커밋한다(화면이 1초마다 이어 읽는다)."""
@@ -639,10 +641,19 @@ class Agent:
 
     async def _report_summary(self, payload: dict[str, Any]) -> None:
         """보고를 LLM이 두 줄(스스로 묻는 한 줄 · 답 한 줄)로 말한다. LLM이 안 되면 말 없이 보고만 싣는다."""
+        # 처음 · 끝을 '처음 → 끝' 글로 준다. 이름 없는 [처음, 끝] 목록을 주었더니 LLM이 둘을 더해
+        # "심각 6건 · 주의 16건"(처음 5 + 끝 1, 처음 11 + 끝 5)처럼 말했다.
+        first, last = payload["counts"]
         facts = {
-            "종합": payload["overall"],
-            "심각 · 주의": payload["counts"],
-            "고친 검사": [f"{row['name']} {row['from']} → {row['to']}" for row in payload["rows"]],
+            "종합 (처음 → 끝)": " → ".join(payload["overall"]),
+            "심각 검사 수 (처음 → 끝)": f"{first[GRADE_BAD]} → {last[GRADE_BAD]}",
+            "주의 검사 수 (처음 → 끝)": f"{first[GRADE_WARN]} → {last[GRADE_WARN]}",
+            "수 (처음 → 끝)": [
+                f"{item['name']} {item['from']} → {item['to']}" for item in payload["kpi"]
+            ],
+            "고친 검사 (처음 → 끝)": [
+                f"{row['name']} {row['from']} → {row['to']}" for row in payload["rows"]
+            ],
             "바꿈": payload["changed"],
         }
         try:
@@ -729,7 +740,7 @@ class Agent:
 REPORT_SUMMARY_PROMPT = (
     "너는 학습 데이터 도구 DENT의 도우미다. 방금 끝낸 일의 보고를 두 줄로 쓴다. "
     "첫 줄은 스스로 묻는 물음 한 줄('?'로 끝), 둘째 줄은 그 답 한 줄. 존댓말 없이 짧게, 수를 넣는다. "
-    "다른 말은 쓰지 않는다."
+    "수마다 무엇의 수인지 낱말을 붙인다(예: '라벨 바꾸기 41', '심각 5 → 1'). 다른 말은 쓰지 않는다."
 )
 
 

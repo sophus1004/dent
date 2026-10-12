@@ -194,6 +194,29 @@ async def test_decide_all_keeps_only_what_jev_found_fine(client, db_session):
     assert _check(overview, "refusal")["count"] == 0
 
 
+async def test_jev_refusal_score_alone_does_not_make_a_refusal_fine(client, db_session):
+    # 준비: 멀쩡한 요청을 거절했는데 Jev가 '따르지 않음'과 함께 '마땅한 거절' 0.9를 준다.
+    rows = [conversation("여행 계획을 짜 줘", "죄송하지만 엉뚱한 요청은 도와드릴 수 없습니다.")]
+    finished = await import_file(db_session, jsonl_bytes(messages_rows(rows)))
+    ids = sorted(await _ids(db_session, finished.dataset_id))
+    await connect_models(db_session)
+    await build_analysis(
+        db_session, dataset_id=finished.dataset_id, jev_transport=judge_transport()
+    )
+
+    # 실행
+    read = (await client.get(f"{API}/conversations/{ids[0]}")).json()
+    kept = await client.post(
+        f"{API}/datasets/{finished.dataset_id}/decide-all",
+        json={"check": "refusal", "action": "keep", "only_jev_ok": True},
+    )
+
+    # 확인: 괜찮다고 보지 않아 [Jev 괜찮음 모두 그대로 두기]로 두지 않는다(LLM · 사람이 본다).
+    assert round(read["jev"]["refusal_ok"], 2) == 0.9
+    assert read["jev"]["looks_fine"] is False
+    assert kept.json() == {"changed": 0}
+
+
 async def test_map_points_and_near_partners(client, db_session):
     # 준비
     dataset_id, ids = await _dataset(db_session)

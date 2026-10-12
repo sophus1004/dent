@@ -58,6 +58,14 @@ uv run dent
     <td><b>의미 지도</b> · 문장을 뜻으로 놓고 라벨이나 문제로 칠합니다. 점을 누르면 그 문장이 열립니다</td>
     <td><b>검색 흐름</b> · 문서 → 질의 → 하드 네거티브 가운데 지금 할 일과 그 단계의 검사, 기준 검색 점수</td>
   </tr>
+  <tr>
+    <td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/generation-review-dark.webp"><img src="docs/images/generation-review-light.webp" alt="생성의 검토: 문제 대화 한 건과 문제 자리, 숫자 키로 고르는 결정(대화 빼기 · LLM으로 다시 쓰기 · 그대로 두기)"></picture></td>
+    <td width="50%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/classification-helper-dark.webp"><img src="docs/images/classification-helper-light.webp" alt="도우미 창: 단계마다 고친 수 · 판정 모델 · LLM 토큰과 처음 → 끝, 끝난 뒤 남은 것과 AI로 고치기"></picture></td>
+  </tr>
+  <tr>
+    <td><b>생성 검토</b> · 문제 대화를 한 건씩 보고 숫자 키로 정합니다. 문제 자리를 칠하고, 규칙이 권하는 결정이 맨 위에 옵니다</td>
+    <td><b>도우미</b> · 규칙 → 판정 모델 → LLM 순서로 고치고 단계마다 고친 수와 쓴 토큰을 남깁니다. 남은 것은 골라 AI로 고칩니다</td>
+  </tr>
 </table>
 
 ## 주요 기능
@@ -289,6 +297,8 @@ scripts/launch_check.py   실행과 종료 확인 (GitHub Actions가 Windows · 
 
 - 모듈: 분류 · 검색 · 생성. 생성은 SFT(지시와 응답)만 다루고, 지시만 있는 데이터 · 선호 쌍 · 도구 호출은 아래 '로드맵'에 있습니다.
 - 학습 · 평가 분할(train · valid · test)은 하지 않습니다. 모든 데이터를 한 덩어리로 정리하고, 내보내는 파일의 출처 칸으로 AI가 만든 것을 가릅니다.
+- 도우미 · AI로 고치기 · 질의 만들기 · 새 문장은 세 모듈의 내장 예시에서 실제 LLM(gpt-5.4-mini)으로 처음부터 끝까지 돌려 확인했습니다.
+  판정 모델은 한국어에서 엉뚱한 응답의 절반쯤만 확인해, 지시 불일치처럼 판정 모델만으로 정하지 않는 검사는 LLM이 한 번 더 봅니다.
 - 판정 모델의 신뢰도를 한국어 사람 판정으로 다시 재는 일, 가까운 벡터 찾기 인덱스(ANN)는 아직 하지 않았습니다.
 - 설치 · 테스트 · 실행과 종료(내장 DB 포함)는 macOS · Linux에서 확인했습니다. Windows는 아직 확인 중입니다(Windows의 내장 DB는 소켓 대신 `127.0.0.1`의 빈 포트로 붙습니다).
 

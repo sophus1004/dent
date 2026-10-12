@@ -106,7 +106,10 @@ def mismatch_ids(dataset_id: int, analysis_id: int) -> Select[tuple[int]]:
 
 
 def jev_fine_ids(dataset_id: int, analysis_id: int, check: CheckKey) -> Select[tuple[int]]:
-    """규칙이 잡은 검사(거절 · 짧은 응답)가 남았는데 Jev가 괜찮다고 본 대화 번호들."""
+    """규칙이 잡은 검사(거절 · 짧은 응답)가 남았는데 Jev가 괜찮다고 본(지시를 따른다고 확인한) 대화 번호들.
+
+    마땅한 거절 점수만으로는 넣지 않는다(judging.looks_fine과 같은 기준).
+    """
     confirm = judging.CONFIRM_PROBABILITY
     return (
         select(Prompt.id)
@@ -118,7 +121,7 @@ def jev_fine_ids(dataset_id: int, analysis_id: int, check: CheckKey) -> Select[t
             Prompt.dataset_id == dataset_id,
             IS_ACTIVE,
             has_open(check.value),
-            or_(Judgment.follows >= confirm, Judgment.refusal_ok >= confirm),
+            Judgment.follows >= confirm,
         )
         .order_by(Prompt.id)
     )

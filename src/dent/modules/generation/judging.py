@@ -104,11 +104,13 @@ def is_mismatch(follows: float | None) -> bool:
     return follows is not None and follows <= 1 - CONFIRM_PROBABILITY
 
 
-def looks_fine(follows: float | None, refusal_ok: float | None) -> bool:
-    """규칙이 잡은 거절 · 짧은 응답을 Jev가 괜찮다고 봤는지(따름 또는 마땅한 거절)."""
-    return (follows is not None and follows >= CONFIRM_PROBABILITY) or (
-        refusal_ok is not None and refusal_ok >= CONFIRM_PROBABILITY
-    )
+def looks_fine(follows: float | None) -> bool:
+    """규칙이 잡은 거절 · 짧은 응답을 Jev가 괜찮다고 봤는지(응답이 지시를 따른다고 확인).
+
+    '마땅한 거절' 점수만으로는 괜찮다고 보지 않는다: 실제 laya가 멀쩡한 안내문 요약을 거절한 응답에도
+    마땅한 거절 0.83을 주었다. 거절이 마땅한지는 LLM이 그 점수를 보고 한 번 더 판단한다.
+    """
+    return follows is not None and follows >= CONFIRM_PROBABILITY
 
 
 def _yes(decision: JevDecision, question: str) -> float | None:

@@ -595,7 +595,7 @@ def _jev_read(judgment: Judgment | None) -> JevRead | None:
         follows=judgment.follows,
         refusal_ok=judgment.refusal_ok,
         similarity=judgment.similarity,
-        looks_fine=judging.looks_fine(judgment.follows, judgment.refusal_ok),
+        looks_fine=judging.looks_fine(judgment.follows),
     )
 
 

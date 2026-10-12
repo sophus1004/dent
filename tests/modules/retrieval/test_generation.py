@@ -122,6 +122,32 @@ def test_specs_follow_question_share():
     assert abs(shares[60] - 0.4) < 0.05
 
 
+def test_keyword_specs_use_search_box_lengths():
+    # 실행
+    specs = [
+        spec
+        for document in _fake_documents(50)
+        for spec in generation._specs(document, count=4, offset=0, question_share=60)
+    ]
+
+    # 확인: 검색어형은 검색어 길이만, 질문형은 질문 길이만 받는다.
+    keywords = {spec.length for spec in specs if spec.kind == generation.KEYWORD_TYPE}
+    questions = {spec.length for spec in specs if spec.kind != generation.KEYWORD_TYPE}
+    assert keywords <= set(generation.KEYWORD_LENGTHS)
+    assert questions <= set(generation.QUERY_LENGTHS)
+
+
+def test_too_long_keyword_is_filtered_by_shape():
+    # 준비: 청크의 낱말을 열 개 늘어놓은 검색어와 같은 길이의 질문
+    listed = "해인사 장경판전 팔만대장경 목판 보관 건물 조선 초 1457년 세계유산"
+    question = "해인사 장경판전은 팔만대장경 목판을 어떻게 오래 보관할 수 있었나"
+
+    # 실행 · 확인: 검색어형만 거른다.
+    assert generation.is_too_long_keyword(listed, generation.KEYWORD_TYPE)
+    assert not generation.is_too_long_keyword(question, "background")
+    assert not generation.is_too_long_keyword("해인사 장경판전 보관", generation.KEYWORD_TYPE)
+
+
 def test_specs_use_different_slots_for_retry():
     # 준비
     [document] = _fake_documents(1)
