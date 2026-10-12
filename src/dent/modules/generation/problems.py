@@ -68,6 +68,7 @@ SMALL_MARGIN = 0.1
 # 판정 반대: 버린 응답의 따름 점수가 고른 응답보다 이만큼 이상 높으면 라벨이 뒤집혔을 수 있다
 REVERSED_MARGIN = 0.3
 
+
 def _has_reversed_pair() -> Any:
     """판정 반대가 남은 쌍이 있는 대화 (주 응답 = 고른 응답이 엉뚱할 때: 3 선호에서 뒤집어 고친다)."""
     return exists().where(

@@ -105,6 +105,13 @@ REVIEW_LIMIT = 10
 INSTRUCTION_PREVIEW = 200
 RESPONSE_PREVIEW = 400
 
+# 여러 턴 대화에서 마지막 지시 앞에 함께 보이는 턴 수와 턴마다 글자 수
+EARLIER_TURNS = 4
+EARLIER_PREVIEW = 160
+
+# 앞 턴의 역할 낱말
+ROLE_WORDS = {Role.USER: "사용자", Role.ASSISTANT: "응답"}
+
 # 바꾼 카드에 보이는 보기 수 · 보기 글자 수
 CHANGE_SAMPLE_COUNT = 3
 SAMPLE_LENGTH = 60
@@ -257,9 +264,10 @@ STEPS: tuple[StepDef, ...] = (
     StepDef(
         CheckKey.MISMATCH,
         2,
-        goal="Jev가 응답이 지시를 따르지 않는다고 본 대화다(확인 = Jev 따름 0.2 이하, 의심 = 0.2~0.5). "
-        "Jev가 틀렸으면 keep, 지시와 다른 것을 답했으면 drop. Jev는 대화의 앞 턴을 잇는 질문(예: '그럼 부산은?')을 "
-        "잘못 볼 때가 있으니 앞 지시까지 읽고 판단한다. 판단이 갈리면 hold.",
+        goal="Jev가 응답이 지시를 따르지 않는다고 본 대화다(확인 = Jev 따름 0.2 이하, 의심 = 0.2~0.5). Jev는 자주 틀린다: "
+        "앞 턴을 잇는 짧은 말('그럼 부산은요?' · 주문 번호), 코드만 있는 답, 시 · 분류 답을 따르지 않는다고 볼 때가 많다. "
+        "앞 턴까지 대화를 읽고, 응답이 마지막 사용자 말에 맞게 답하면 keep. 마지막 말과 전혀 다른 것을 답했을 때만 drop. "
+        "판단이 갈리면 hold.",
         needs_analysis=True,
     ),
     StepDef(
@@ -733,7 +741,9 @@ class Helper(Agent):
         self, step: StepDef, state: StepState, before: int, started: float
     ) -> None:
         now = await self._step_count(step)
-        grade_to = self._grade(step, now)
+        # 지시 불일치는 의심(진단에 세지 않음)까지 보이고, 등급은 진단처럼 확인된 것으로 매긴다.
+        graded = await self._count(CheckKey.MISMATCH) if step.key == CheckKey.MISMATCH else now
+        grade_to = self._grade(step, graded)
         await self.emit(
             HelperEventKind.RESULT,
             {"check": step.name, "from": f"{before:,}건", "to": f"{now:,}건", "grade": grade_to},
@@ -1528,7 +1538,7 @@ def _sample(item: conversations.ConversationItem) -> str:
 
 
 def _conversation_line(ref: str, item: conversations.ConversationItem, *, suspect: bool) -> str:
-    """LLM에 보일 대화 한 건: 지시(여러 턴이면 앞 지시) · 응답 앞부분 · Jev 점수 · 의심 표시."""
+    """LLM에 보일 대화 한 건: 앞 턴(여러 턴이면 최근 몇 개를 순서대로) · 마지막 지시 · 응답 앞부분 · Jev 점수 · 의심 표시."""
     judgment = item.judgment
     jev = ""
     if judgment is not None:
@@ -1538,14 +1548,18 @@ def _conversation_line(ref: str, item: conversations.ConversationItem, *, suspec
             jev += f" · Jev 마땅한 거절 {judgment.refusal_ok:.2f}"
         if judgment.unsafe is not None:
             jev += f" · Jev 해로움 {judgment.unsafe:.2f}"
-    users = [m["content"] for m in item.prompt.messages if m["role"] == Role.USER]
-    earlier = ""
-    if len(users) > 1:
-        earlier = f'\n   앞 지시 "{users[-2][:INSTRUCTION_PREVIEW]}" (앞 턴 {len(users) - 1})'
-    instruction = (users[-1] if users else "")[:INSTRUCTION_PREVIEW]
+    context = [m for m in item.prompt.messages if m["role"] in (Role.USER, Role.ASSISTANT)]
+    last_user = next((m["content"] for m in reversed(context) if m["role"] == Role.USER), "")
+    # 마지막 지시 앞의 턴들을 순서대로 (앞 턴을 잇는 말을 LLM이 읽을 수 있게)
+    before = context[:-1][-EARLIER_TURNS:] if context else []
+    earlier = "".join(
+        f'\n   앞 {ROLE_WORDS[m["role"]]} "{m["content"][:EARLIER_PREVIEW]}"' for m in before
+    )
+    instruction = last_user[:INSTRUCTION_PREVIEW]
     answer = (item.answer.content if item.answer else "(응답 없음)")[:RESPONSE_PREVIEW]
     tag = " · 의심" if suspect else ""
-    return f'{ref} 지시 "{instruction}"{earlier}\n   응답 "{answer}"{jev}{tag}'
+    head = f"{ref} 대화" + (f" · 앞 턴 {len(before)}" if before else "")
+    return f'{head}{earlier}\n   지시 "{instruction}"\n   응답 "{answer}"{jev}{tag}'
 
 
 async def run_helper(
