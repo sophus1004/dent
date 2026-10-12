@@ -68,7 +68,7 @@ async def test_save_upload_fails_when_format_is_not_supported(db_session):
         await upload(db_session, "메모.txt", b"hello")
 
     # 확인
-    assert ".csv 또는 .xlsx" in caught.value.message
+    assert ".csv · .xlsx · .jsonl" in caught.value.message
 
 
 async def test_find_upload_fails_when_id_is_not_an_upload_id(db_session):

@@ -39,7 +39,7 @@ async def test_upload_file_returns_422_when_format_is_not_supported(client, db_s
     # 확인
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert response.json() == {
-        "detail": "지원하지 않는 형식입니다. .csv 또는 .xlsx 파일을 올려 주세요."
+        "detail": "지원하지 않는 형식입니다. .csv · .xlsx · .jsonl 파일을 올려 주세요."
     }
 
 

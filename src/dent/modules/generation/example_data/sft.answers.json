@@ -1,0 +1,106 @@
+{
+  "key": "sft",
+  "rows": 85,
+  "planted": [
+    {
+      "name": "같은 지시",
+      "count": 4,
+      "unit": "건"
+    },
+    {
+      "name": "빈 지시",
+      "count": 2,
+      "unit": "건"
+    },
+    {
+      "name": "대화 구조",
+      "count": 1,
+      "unit": "건"
+    },
+    {
+      "name": "개인정보",
+      "count": 3,
+      "unit": "건"
+    },
+    {
+      "name": "빈 응답",
+      "count": 1,
+      "unit": "건"
+    },
+    {
+      "name": "잘린 응답",
+      "count": 4,
+      "unit": "건"
+    },
+    {
+      "name": "번역된 코드",
+      "count": 3,
+      "unit": "건"
+    },
+    {
+      "name": "반복 루프",
+      "count": 2,
+      "unit": "건"
+    },
+    {
+      "name": "거절 · 상투구",
+      "count": 3,
+      "unit": "건"
+    },
+    {
+      "name": "짧은 응답",
+      "count": 3,
+      "unit": "건"
+    },
+    {
+      "name": "반복 문장",
+      "count": 2,
+      "unit": "건"
+    },
+    {
+      "name": "언어 섞임",
+      "count": 2,
+      "unit": "건"
+    },
+    {
+      "name": "깨진 글자",
+      "count": 2,
+      "unit": "건"
+    },
+    {
+      "name": "긴 응답",
+      "count": 1,
+      "unit": "건"
+    },
+    {
+      "name": "근접 중복",
+      "count": 3,
+      "unit": "건"
+    },
+    {
+      "name": "지시 불일치",
+      "count": 4,
+      "unit": "건"
+    }
+  ],
+  "checks": {
+    "broken": 2,
+    "code_translated": 3,
+    "duplicate": 4,
+    "empty_answer": 1,
+    "empty_prompt": 2,
+    "lang_mix": 2,
+    "long": 1,
+    "loop": 2,
+    "pii": 3,
+    "refusal": 3,
+    "repeat": 2,
+    "short": 3,
+    "structure": 1,
+    "truncated": 4
+  },
+  "semantic": {
+    "near_duplicate": 3,
+    "mismatch": 4
+  }
+}

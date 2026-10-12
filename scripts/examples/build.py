@@ -19,6 +19,8 @@ from typing import Any
 
 from openpyxl import Workbook
 
+from dent.modules.generation import rules as generation_rules
+from dent.modules.generation.importing import context_hash
 from dent.modules.retrieval.models import DEFAULT_DOC_MAX_TOKENS, DEFAULT_QUERY_MAX_TOKENS
 from dent.modules.retrieval.text_rules import (
     EASY_PAIR_MIN_CHARS,
@@ -36,6 +38,7 @@ from dent.modules.retrieval.text_rules import (
 ROOT = Path(__file__).resolve().parents[2]
 CONTENT = Path(__file__).resolve().parent / "content"
 CLASSIFICATION_OUT = ROOT / "src/dent/modules/classification/example_data"
+GENERATION_OUT = ROOT / "src/dent/modules/generation/example_data"
 RETRIEVAL_OUT = ROOT / "src/dent/modules/retrieval/example_data"
 
 # 씨앗 (같은 원고면 같은 파일)
@@ -734,6 +737,264 @@ def build_company() -> None:
     print(f"company.csv {len(rows)}줄")
 
 
+# ---------- 생성: 상담 · 글쓰기 SFT ----------
+
+# 심는 수 (원고 76대화에서 서로 다른 대화를 골라 심는다)
+GEN_DUPLICATES = 3  # 똑같은 사본 (같은 지시 여분)
+GEN_EMPTY_PROMPT = 2  # 사용자 말을 비운 사본
+GEN_STRUCTURE = 1  # 사용자 말이 두 번 잇달아 나오는 사본
+GEN_PII = 3  # 예약된 이메일(example.com)을 넣은 대화
+GEN_EMPTY_ANSWER = 1  # 응답을 비운 대화
+GEN_TRUNCATED = 4  # 응답을 문장 가운데서 자른 대화
+GEN_CODE_TRANSLATED = 3  # 코드 안의 이름을 한국어로 바꾼 대화
+GEN_LOOP = 2  # 끝에 같은 조각을 되풀이한 대화
+GEN_REFUSAL = 3  # 멀쩡한 요청을 거절 · 상투구로 답한 대화
+GEN_SHORT = 3  # 분류 과제의 답을 한 낱말로 줄인 대화 (맞는 답이라 Jev가 괜찮다고 볼 수 있다)
+GEN_REPEAT = 2  # 한 문장을 네 번 되풀이한 대화
+GEN_LANG_MIX = 2  # 번역 과제를 영어로 답한 대화
+GEN_BROKEN = 2  # 대체 문자(�)가 든 대화
+GEN_LONG = 1  # 여러 응답을 이어 6,000자를 넘긴 대화
+# 뜻 분석이 있어야 보이는 것 (정답지의 semantic)
+GEN_NEAR = 3  # 지시를 조금 바꿔 쓴 사본 (근접 중복)
+GEN_MISMATCH = 2  # 응답을 서로 바꿔 단 분류 · 아이디어 대화 짝 (지시 불일치 2 × 2)
+
+# 번역된 코드: 코드 안에서 바꿀 이름 (영어 → 한국어)
+CODE_RENAMES = {
+    "values": "값들",
+    "value": "값",
+    "text": "글",
+    "total": "합계",
+    "numbers": "수들",
+    "path": "경로",
+    "scores": "점수",
+    "ranked": "순위",
+    "count": "개수",
+}
+
+# 거절 · 상투구 응답
+GEN_REFUSALS = (
+    "죄송하지만 그 요청은 도와드릴 수 없습니다.",
+    "AI 언어 모델로서 저는 개인적인 의견을 드릴 수 없습니다. 다른 도움이 필요하시면 말씀해 주세요.",
+    "죄송하지만 이 요청은 제 정책상 이행할 수 없습니다.",
+)
+
+# 영어로 답한 번역 (언어 섞임)
+GEN_ENGLISH = (
+    "Sure! Here is the translation you asked for. The meeting has been rescheduled, so please check your calendar again.",
+    "Of course. The sentence simply means that you should water the plants two times every week, nothing more.",
+)
+
+
+def _answer(item: dict[str, Any]) -> str:
+    return item["messages"][-1]["content"]
+
+
+def _with_answer(item: dict[str, Any], answer: str) -> dict[str, Any]:
+    return {**item, "messages": [*item["messages"][:-1], {"role": "assistant", "content": answer}]}
+
+
+def _with_user(item: dict[str, Any], change: Any) -> dict[str, Any]:
+    """마지막 사용자 말을 change(글)로 바꾼 사본."""
+    messages = [dict(m) for m in item["messages"]]
+    last = max(i for i, m in enumerate(messages) if m["role"] == "user")
+    messages[last]["content"] = change(messages[last]["content"])
+    return {**item, "messages": messages}
+
+
+def _truncate(text: str) -> str:
+    """문장 가운데서 자른다(마지막 줄이 짧지 않게, 끝에 문장 부호가 없게)."""
+    cut = text[: max(40, int(len(text) * 0.6))].rstrip()
+    while cut and (cut[-1] in ".!?:)" or cut[-1] in "다요죠까네음함임됨"):
+        cut = cut[:-1].rstrip()
+    return cut
+
+
+def _translate_code(text: str) -> str:
+    """코드 울타리 안의 이름만 한국어로 바꾼다(번역기가 코드까지 옮긴 모양)."""
+
+    def rename(match: re.Match[str]) -> str:
+        code = match.group(0)
+        for english, korean in CODE_RENAMES.items():
+            code = re.sub(rf"\b{english}\b", korean, code)
+        return code
+
+    return re.sub(r"```[^\n]*\n.*?```", rename, text, flags=re.DOTALL)
+
+
+def build_gen_sft() -> None:
+    """상담 · 글쓰기 SFT: 원고에 글의 모양 문제를 모두 심고, 뜻으로만 보이는 문제도 조금 심는다(messages jsonl)."""
+    items = read_jsonl(CONTENT / "gen_sft" / "sft.jsonl")
+    if any(generation_rules.measure(item["messages"]) for item in items):
+        sys.exit("생성 원고에 규칙 문제가 있습니다(원고는 깨끗해야 한다).")
+    rng = random.Random(SEED)
+    by_task: dict[str, list[int]] = {}
+    for index, item in enumerate(items):
+        by_task.setdefault(item["task"], []).append(index)
+    single = [i for i, item in enumerate(items) if len(item["messages"]) == 2]
+    used: set[int] = set()
+
+    def take(pool: list[int], count: int, plant: Any = None, key: str = "") -> list[int]:
+        """pool에서 아직 쓰지 않은 대화를 count개 고른다. plant · key를 주면 심었을 때 그 검사에 걸리는 것만."""
+        free = [index for index in pool if index not in used]
+        if plant is not None:
+            free = [
+                index
+                for index in free
+                if key in generation_rules.measure(plant(items[index])["messages"])
+            ]
+        picked = rng.sample(free, count)
+        used.update(picked)
+        return picked
+
+    rows = [dict(item) for item in items]
+    added: list[dict[str, Any]] = []
+
+    def translated(item: dict[str, Any]) -> dict[str, Any]:
+        return _with_answer(item, _translate_code(_answer(item)))
+
+    for index in take(by_task["code"], GEN_CODE_TRANSLATED, translated, "code_translated"):
+        rows[index] = translated(items[index])
+    for index in take(by_task["translate"], GEN_LANG_MIX):
+        rows[index] = _with_answer(rows[index], GEN_ENGLISH[len(used) % len(GEN_ENGLISH)])
+    for index in take(by_task["classify"], GEN_SHORT):
+        rows[index] = _with_answer(rows[index], _answer(items[index]).split(".")[0][:3])
+    # 지시 불일치: 분류 대화와 아이디어 대화의 응답을 서로 바꿔 단다(뜻 분석 · Jev가 잡는다).
+    # 과제가 먼 짝이라야 Jev가 양쪽 모두 '따르지 않음'으로 본다. 바꾼 뒤 다른 검사에 걸리는 짝은 쓰지 않는다
+    # (다른 검사가 잡은 대화는 지시 불일치로 세지 않는다).
+    clean_pairs = [
+        (left, right)
+        for left in by_task["classify"]
+        for right in by_task["ideas"]
+        if left not in used
+        and right not in used
+        and not generation_rules.measure(
+            _with_answer(items[left], _answer(items[right]))["messages"]
+        )
+        and not generation_rules.measure(
+            _with_answer(items[right], _answer(items[left]))["messages"]
+        )
+    ]
+    swapped = 0
+    for left, right in rng.sample(clean_pairs, len(clean_pairs)):
+        if swapped == GEN_MISMATCH:
+            break
+        if left in used or right in used:
+            continue
+        used.update((left, right))
+        swapped += 1
+        rows[left] = _with_answer(items[left], _answer(items[right]))
+        rows[right] = _with_answer(items[right], _answer(items[left]))
+    prose = by_task["writing"] + by_task["explain"] + by_task["ideas"] + by_task["summary"]
+
+    def truncated(item: dict[str, Any]) -> dict[str, Any]:
+        return _with_answer(item, _truncate(_answer(item)))
+
+    for index in take(prose, GEN_TRUNCATED, truncated, "truncated"):
+        rows[index] = truncated(items[index])
+    for offset, index in enumerate(take(prose, GEN_REFUSAL)):
+        rows[index] = _with_answer(rows[index], GEN_REFUSALS[offset])
+    for index in take(prose, GEN_LOOP):
+        rows[index] = _with_answer(rows[index], _answer(items[index]) + " 정말 좋아요" * 8)
+    for index in take(prose, GEN_REPEAT):
+        sentence = "이 내용은 꼭 기억해 두시면 앞으로 큰 도움이 됩니다."
+        rows[index] = _with_answer(rows[index], _answer(items[index]) + ("\n" + sentence) * 4)
+    for index in take(prose, GEN_BROKEN):
+        rows[index] = _with_answer(rows[index], _answer(items[index]).replace(" ", " \ufffd", 1))
+    for index in take(prose, GEN_EMPTY_ANSWER):
+        rows[index] = _with_answer(rows[index], "")
+    for offset, index in enumerate(take(prose, GEN_PII)):
+        contact = f"문의는 help{offset + 1}@example.com으로 해 주세요."
+        rows[index] = _with_user(rows[index], lambda text, c=contact: f"{text}\n{c}")
+    long_index = take(by_task["math"], GEN_LONG)[0]
+    # 코드가 아닌 모든 응답(여러 턴 대화의 응답까지)을 이어 6,000자를 넘긴다(같은 문장이 되풀이되지 않게).
+    long_text = "\n\n".join(
+        message["content"]
+        for item in items
+        if item["task"] != "code"
+        for message in item["messages"]
+        if message["role"] == "assistant"
+    )
+    rows[long_index] = _with_answer(rows[long_index], long_text)
+    clean = [i for i in single if i not in used]
+    for index in rng.sample(clean, GEN_DUPLICATES):
+        added.append(dict(rows[index]))
+    for index in rng.sample(clean, GEN_EMPTY_PROMPT):
+        added.append(_with_user(rows[index], lambda _text: ""))
+    for index in rng.sample(clean, GEN_STRUCTURE):
+        item = rows[index]
+        added.append({**item, "messages": [item["messages"][0], *item["messages"]]})
+    for index in rng.sample(clean, GEN_NEAR):
+        added.append(_with_user(rows[index], lambda text: "간단히 답해 줘. " + text))
+    final = rows + added
+    rng.shuffle(final)
+
+    checks: dict[str, int] = {}
+    for item in final:
+        for key in generation_rules.measure(item["messages"]):
+            checks[key] = checks.get(key, 0) + 1
+    hashes = [context_hash(item["messages"][:-1]) for item in final]
+    checks["duplicate"] = len(hashes) - len(set(hashes))
+    GENERATION_OUT.mkdir(parents=True, exist_ok=True)
+    with (GENERATION_OUT / "sft.jsonl").open("w", encoding="utf-8") as file:
+        for item in final:
+            file.write(json.dumps(item, ensure_ascii=False) + "\n")
+    # 심은 문제는 실제로 잰 수로 보인다(심은 것끼리 겹쳐 생긴 것도 센다. 예: 빈 지시 사본끼리 같은 지시).
+    names = {
+        "duplicate": "같은 지시",
+        "empty_prompt": "빈 지시",
+        "structure": "대화 구조",
+        "pii": "개인정보",
+        "empty_answer": "빈 응답",
+        "truncated": "잘린 응답",
+        "code_translated": "번역된 코드",
+        "loop": "반복 루프",
+        "refusal": "거절 · 상투구",
+        "short": "짧은 응답",
+        "repeat": "반복 문장",
+        "lang_mix": "언어 섞임",
+        "broken": "깨진 글자",
+        "long": "긴 응답",
+    }
+    planted = [(name, checks[key]) for key, name in names.items() if checks.get(key)]
+    planted += [("근접 중복", GEN_NEAR), ("지시 불일치", GEN_MISMATCH * 2)]
+    write_answers(
+        GENERATION_OUT / "sft.answers.json",
+        {
+            "key": "sft",
+            "rows": len(final),
+            "planted": [{"name": name, "count": count, "unit": "건"} for name, count in planted],
+            "checks": dict(sorted(checks.items())),
+            "semantic": {"near_duplicate": GEN_NEAR, "mismatch": GEN_MISMATCH * 2},
+        },
+    )
+    print(f"sft.jsonl {len(final)}줄 · 검사 {checks}")
+
+
+def build_gen_chat() -> None:
+    """달라마켓 상담 여러 턴 대화: 문제가 없는 대조군(ShareGPT 모양 jsonl)."""
+    items = read_jsonl(CONTENT / "gen_chat" / "chat.jsonl")
+    roles = {"system": "system", "human": "user", "gpt": "assistant"}
+    for item in items:
+        messages = [
+            {"role": roles[turn["from"]], "content": turn["value"]}
+            for turn in item["conversations"]
+        ]
+        if generation_rules.measure(messages):
+            sys.exit("대화 원고에 규칙 문제가 있습니다.")
+    rng = random.Random(SEED)
+    rows = list(items)
+    rng.shuffle(rows)
+    GENERATION_OUT.mkdir(parents=True, exist_ok=True)
+    with (GENERATION_OUT / "chat.jsonl").open("w", encoding="utf-8") as file:
+        for item in rows:
+            file.write(json.dumps(item, ensure_ascii=False) + "\n")
+    write_answers(
+        GENERATION_OUT / "chat.answers.json",
+        {"key": "chat", "rows": len(rows), "planted": [], "checks": {}, "semantic": {}},
+    )
+    print(f"chat.jsonl {len(rows)}줄")
+
+
 BUILDERS = {
     "topics": build_topics,
     "intents": build_intents,
@@ -741,6 +1002,8 @@ BUILDERS = {
     "reading": build_reading,
     "triplets": build_triplets,
     "company": build_company,
+    "sft": build_gen_sft,
+    "chat": build_gen_chat,
 }
 
 

@@ -5,5 +5,6 @@
 """
 
 from dent.modules.classification import models as classification_models  # noqa: F401  분류
+from dent.modules.generation import models as generation_models  # noqa: F401  생성
 from dent.modules.retrieval import models as retrieval_models  # noqa: F401  검색
 from dent.system import models as system_models  # noqa: F401  시스템

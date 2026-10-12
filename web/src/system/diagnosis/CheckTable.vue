@@ -10,10 +10,11 @@
   - → 는 글자 없는 작은 버튼이다(올리면 '문장 16건 보기'). 데이터 탭 거르기 · 제안 탭 · 의미 지도로 간다.
   - 표가 62.5rem보다 좁으면 영향 칸을 빼고, 40rem보다 좁으면(도우미 창을 옆에 둘 때) 조치는 아이콘만 둔다(올리면 이름).
     폭은 표 자신의 폭을 rem으로 잰다(@container) — 브라우저 확대 · 글꼴 크기가 달라도 같은 규칙.
-  pending에 검사 이름을 주면 아직 값이 없는 흐린 줄(— )을 그린다(뜻 분석 전).
+  pending에 검사 이름을 주면 아직 값이 없는 흐린 줄(— )을 그린다(뜻 분석 전). checks에 이미 있는 검사는 그리지 않는다.
 -->
 <script setup lang="ts">
 import { ArrowRight, Info, Wrench } from '@lucide/vue'
+import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { Button } from '@/system/ui/button'
@@ -22,13 +23,16 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/system/ui/tooltip'
 import GradeBadge from '@/system/diagnosis/GradeBadge.vue'
 import { GRADES, type Check, type CheckWords } from '@/system/diagnosis/grades'
 
-defineProps<{
+const props = defineProps<{
   checks: Check[]
   // 검사 이름 → 고정 낱말 (모듈이 준다)
   words: Record<string, CheckWords>
-  // 값이 없는 흐린 줄로 그릴 검사 (checks가 비었을 때)
+  // 값이 없는 흐린 줄로 그릴 검사 (checks에 없는 것만 그린다)
   pending?: string[]
 }>()
+
+// 흐린 줄로 그릴 검사: pending 가운데 아직 값이 없는 것
+const pendingKeys = computed(() => (props.pending ?? []).filter((key) => !props.checks.some((check) => check.key === key)))
 
 // 칸 격자. 넓으면 영향 칸이 하나 더 생긴다.
 // 영향 칸(150px)은 '평가 점수 부풀림' 태그가, 조치 칸(168px)은 '라벨 하나로 통일' 태그가 한 줄에 들어가는 너비다.
@@ -161,7 +165,7 @@ const TAG_CLASS =
     </div>
 
     <div
-      v-for="key in checks.length ? [] : (pending ?? [])"
+      v-for="key in pendingKeys"
       :key="key"
       role="row"
       :data-check-pending="key"

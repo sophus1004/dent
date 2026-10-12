@@ -25,7 +25,7 @@ const BASE = '/api/v1'
 
 // ---------- 올린 파일 ----------
 
-/** 파일(.csv·.tsv·.xlsx)을 올리고 처음 20줄을 미리 본다. 진행률은 options.onProgress로 받는다. */
+/** 파일(.csv·.tsv·.xlsx·.jsonl)을 올리고 처음 20줄을 미리 본다. 진행률은 options.onProgress로 받는다. */
 export function uploadFile(file: File, options: UploadOptions = {}): Promise<FilePreviewRead> {
   const form = new FormData()
   form.append('file', file)

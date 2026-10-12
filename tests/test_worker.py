@@ -5,6 +5,7 @@ from sqlalchemy import delete, func, select
 
 from dent import worker
 from dent.modules.classification import examples as classification_examples
+from dent.modules.generation import examples as generation_examples
 from dent.modules.retrieval import examples as retrieval_examples
 from dent.system import connections as connections_service
 from dent.system import datasets as datasets_service
@@ -12,7 +13,11 @@ from dent.system import examples as examples_service
 from dent.system.models import ConnectionRole, Dataset, EmbeddingModel, Flag
 
 # 모든 모듈의 내장 예시
-ALL_EXAMPLES = (*classification_examples.EXAMPLES, *retrieval_examples.EXAMPLES)
+ALL_EXAMPLES = (
+    *classification_examples.EXAMPLES,
+    *retrieval_examples.EXAMPLES,
+    *generation_examples.EXAMPLES,
+)
 from tests.system.helpers import EMBEDDING_MODEL, EMBEDDING_URL, embedding_transport
 
 
@@ -79,11 +84,12 @@ async def test_install_first_run_examples_adds_every_example_only_once(db_sessio
     first = await worker._install_first_run_examples()
     second = await worker._install_first_run_examples()
 
-    # 확인: 처음에만 모든 모듈의 예시를 가져오기로 넣고, 한 번 했다는 표시를 남긴다.
+    # 확인: 처음에만 모든 모듈의 예시를 가져오기로 넣고, 모듈마다 한 번 했다는 표시를 남긴다.
     names = set(await db_session.scalars(select(Dataset.name)))
     assert (first, second) == (len(ALL_EXAMPLES), 0)
     assert names == {example.name for example in ALL_EXAMPLES}
-    assert await db_session.get(Flag, examples_service.FIRST_RUN_FLAG) is not None
+    for module in worker.FIRST_RUN_EXAMPLES:
+        assert await db_session.get(Flag, examples_service.first_run_flag(module)) is not None
 
 
 async def test_install_first_run_examples_does_not_bring_back_deleted_examples(db_session):
@@ -100,16 +106,38 @@ async def test_install_first_run_examples_does_not_bring_back_deleted_examples(d
     assert await db_session.scalar(select(func.count()).select_from(Dataset)) == 0
 
 
-async def test_install_first_run_examples_leaves_database_in_use_alone(db_session):
-    # 준비: 이 기능 전부터 데이터셋이 있던 DB
+async def test_install_first_run_examples_leaves_module_in_use_alone(db_session):
+    # 준비: 예시 넣기 전부터 분류 데이터셋이 있던 DB
     await datasets_service.create_dataset(db_session, module="classification", name="쓰던 데이터")
+    await db_session.commit()
+
+    # 실행
+    await worker._install_first_run_examples()
+
+    # 확인: 쓰던 분류에는 예시를 넣지 않고 표시만 남기고(뒤에 지워도 넣지 않는다), 다른 모듈은 넣는다.
+    classification = list(
+        await db_session.scalars(select(Dataset.name).where(Dataset.module == "classification"))
+    )
+    others = set(
+        await db_session.scalars(select(Dataset.name).where(Dataset.module != "classification"))
+    )
+    assert classification == ["쓰던 데이터"]
+    assert others == {
+        example.name for example in (*retrieval_examples.EXAMPLES, *generation_examples.EXAMPLES)
+    }
+    assert await db_session.get(Flag, examples_service.first_run_flag("classification")) is not None
+
+
+async def test_install_first_run_examples_adds_only_module_added_later(db_session):
+    # 준비: 분류 · 검색만 있던 때 처음 실행을 마쳤고, 예시는 사람이 지웠다. 그 뒤 생성 모듈이 붙었다.
+    for module in ("classification", "retrieval"):
+        await examples_service.mark_first_run_done(db_session, module=module)
     await db_session.commit()
 
     # 실행
     started = await worker._install_first_run_examples()
 
-    # 확인: 예시를 넣지 않고 표시만 남긴다(뒤에 데이터셋을 지워도 넣지 않는다).
-    names = list(await db_session.scalars(select(Dataset.name)))
-    assert started == 0
-    assert names == ["쓰던 데이터"]
-    assert await db_session.get(Flag, examples_service.FIRST_RUN_FLAG) is not None
+    # 확인: 새로 붙은 생성의 예시만 넣는다.
+    names = set(await db_session.scalars(select(Dataset.name)))
+    assert started == len(generation_examples.EXAMPLES)
+    assert names == {example.name for example in generation_examples.EXAMPLES}

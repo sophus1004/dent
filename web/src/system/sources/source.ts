@@ -31,7 +31,7 @@ export type LoadedSource = FileSource | HuggingFaceSource
 export type ImportPhase = 'ready' | 'starting' | 'running' | 'done' | 'failed'
 
 // 파일로 받는 확장자. 서버(system/tables.py의 FORMAT_BY_SUFFIX)와 같다.
-export const FILE_SUFFIXES = ['.csv', '.tsv', '.xlsx']
+export const FILE_SUFFIXES = ['.csv', '.tsv', '.xlsx', '.jsonl', '.json']
 
 /** 받는 확장자인지. 'a.CSV' → true */
 export function isSupportedFile(fileName: string): boolean {

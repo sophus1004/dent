@@ -633,12 +633,12 @@ function deltaGrade(step: HelperStep): Grade {
         >
           <button
             type="button"
-            class="grid min-h-10 w-full grid-cols-[16px_14px_minmax(0,1fr)_auto_14px] items-center gap-2 px-3 py-1 text-left"
+            class="grid min-h-10 w-full grid-cols-[16px_18px_minmax(0,1fr)_auto_14px] items-center gap-2 px-3 py-1 text-left"
             :class="eventsByStep.get(step.no)?.length ? 'cursor-pointer' : 'cursor-default'"
             @click="toggle(step)"
           >
             <component :is="statusIcon(step.status).icon" class="size-[15px]" :class="statusIcon(step.status).tone" />
-            <span class="text-[11px] font-bold text-muted-foreground">{{ step.no }}</span>
+            <span class="text-[11px] font-bold whitespace-nowrap text-muted-foreground tabular-nums">{{ step.no }}</span>
             <span class="flex min-w-0 flex-wrap items-center gap-1.5">
               <span
                 class="font-semibold whitespace-nowrap"

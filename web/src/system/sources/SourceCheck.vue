@@ -6,7 +6,7 @@
   고친 원본은 v-model:source로 화면에 돌려준다. [이전]은 back, [다음]은 next.
 -->
 <script setup lang="ts">
-import { Database, FileSpreadsheet, FileText, LoaderCircle, OctagonAlert } from '@lucide/vue'
+import { Database, FileJson, FileSpreadsheet, FileText, LoaderCircle, OctagonAlert } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref } from 'vue'
 
 import { previewHuggingFace, previewUpload } from '@/system/api'
@@ -32,7 +32,7 @@ const emit = defineEmits<{
 const source = defineModel<LoadedSource>('source', { required: true })
 
 // 화면에 보일 이름
-const FORMAT_NAMES = { csv: 'CSV', xlsx: '엑셀' }
+const FORMAT_NAMES = { csv: 'CSV', xlsx: '엑셀', jsonl: 'JSONL' }
 const ENCODING_NAMES = { 'utf-8': 'UTF-8', cp949: 'CP949' }
 const DELIMITER_NAMES = { ',': '쉼표', '\t': '탭', ';': '세미콜론' }
 
@@ -124,7 +124,7 @@ onBeforeUnmount(() => reloadController?.abort())
     <template v-if="file">
       <div class="flex h-11 min-w-0 items-center gap-2 border-b px-4">
         <component
-          :is="file.preview.format === 'xlsx' ? FileSpreadsheet : FileText"
+          :is="file.preview.format === 'xlsx' ? FileSpreadsheet : file.preview.format === 'jsonl' ? FileJson : FileText"
           class="size-4 shrink-0 text-muted-foreground"
         />
         <h2 class="truncate text-body font-semibold">{{ file.fileName }}</h2>

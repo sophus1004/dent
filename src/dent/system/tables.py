@@ -1,4 +1,4 @@
-"""표 읽기: csv·tsv·xlsx·Parquet를 (줄 번호, {열 이름: 값}) 줄로 읽고, 칸 값을 JSON에 담을 모양으로 맞춘다.
+"""표 읽기: csv·tsv·xlsx·jsonl·Parquet를 (줄 번호, {열 이름: 값}) 줄로 읽고, 칸 값을 JSON에 담을 모양으로 맞춘다.
 
 올린 파일(uploads.py)과 허깅페이스(huggingface.py)가 같은 칸 값 규칙을 쓴다.
 미리 보기와 가져오기가 같은 읽기 함수(open_table)를 쓰므로 화면에서 본 줄과 실제로 들어가는 줄이 어긋나지 않는다.
@@ -8,6 +8,10 @@ csv는 첫 줄이 열 이름이다. 글자 인코딩은 UTF-8(BOM 포함)인지 
 따옴표가 닫히지 않은 줄은 말없이 뒷줄을 삼키지 않고 오류로 알린다(strict). 다만 tsv는 따옴표를
 글자 그대로 쓰는 파일이 많아서(예: 따옴표로 시작하는 리뷰), 따옴표 규칙으로 읽히지 않으면 따옴표를
 풀지 않고 다시 읽는다.
+
+jsonl은 한 줄에 JSON 객체 하나다(LLM 학습 데이터가 흔히 쓰는 모양). 모든 줄의 열쇠를 처음 나온 순서로 모아 열 이름으로 쓰고,
+칸 안의 목록 · 사전(대화 messages 등)은 다른 형식과 같은 규칙으로 JSON 글로 담는다(모듈이 다시 푼다).
+.json은 객체 배열이면 통째로 읽고, 아니면 jsonl로 읽는다. 글자 인코딩은 UTF-8뿐이다(JSON의 규칙).
 """
 
 import codecs
@@ -27,9 +31,15 @@ from dent.system.exceptions import InvalidInputError, NotFoundError
 from dent.system.schemas import CellValue
 
 # 받는 확장자와 형식. tsv는 구분자만 다른 csv로 읽는다.
-FORMAT_BY_SUFFIX = {".csv": "csv", ".tsv": "csv", ".xlsx": "xlsx"}
+FORMAT_BY_SUFFIX = {
+    ".csv": "csv",
+    ".tsv": "csv",
+    ".xlsx": "xlsx",
+    ".jsonl": "jsonl",
+    ".json": "jsonl",
+}
 
-UNSUPPORTED_FORMAT_MESSAGE = "지원하지 않는 형식입니다. .csv 또는 .xlsx 파일을 올려 주세요."
+UNSUPPORTED_FORMAT_MESSAGE = "지원하지 않는 형식입니다. .csv · .xlsx · .jsonl 파일을 올려 주세요."
 
 # 파일을 읽는 조각 크기. 큰 파일도 메모리에 한 번에 올리지 않는다.
 CHUNK_BYTES = 1024 * 1024
@@ -57,7 +67,7 @@ NUL = "\x00"
 class FileTable:
     """읽을 준비가 된 표 하나. rows는 첫 줄(열 이름) 다음부터 (줄 번호, {열 이름: 값})을 낸다."""
 
-    # 형식: csv · xlsx
+    # 형식: csv · xlsx · jsonl
     format: str
 
     # 열 이름들
@@ -89,6 +99,8 @@ def open_table(path: Path, *, sheet: str | None) -> FileTable:
         return _open_csv(path)
     if file_format == "xlsx":
         return _open_xlsx(path, sheet=sheet)
+    if file_format == "jsonl":
+        return _open_jsonl(path)
     raise InvalidInputError(UNSUPPORTED_FORMAT_MESSAGE)
 
 
@@ -310,6 +322,75 @@ def _sheet_lines(data: CalamineSheet) -> Iterator[tuple[int, list[Any]]]:
     for row_number, cells in enumerate(data.iter_rows(), start=1):
         if not _is_empty_row(cells):
             yield row_number, cells
+
+
+# ---------- jsonl ----------
+
+
+def _open_jsonl(path: Path) -> FileTable:
+    """jsonl(.json 객체 배열 포함)을 연다. 한 번 훑어 열 이름(모든 열쇠)과 줄 수를 모은다."""
+    columns: dict[str, None] = {}
+    row_count = 0
+    for _line, record in _json_records(path):
+        columns.update(dict.fromkeys(record))
+        row_count += 1
+    if row_count == 0:
+        raise InvalidInputError("파일이 비어 있습니다.")
+    names = list(columns)
+    rows = (
+        (line, {name: cell_value(record.get(name)) for name in names})
+        for line, record in _json_records(path)
+    )
+    return FileTable(format="jsonl", columns=names, row_count=row_count, rows=rows)
+
+
+def _json_records(path: Path) -> Iterator[tuple[int, dict[str, Any]]]:
+    """(줄 번호, 객체)를 차례로 낸다. 빈 줄은 건너뛴다. 읽을 수 없거나 객체가 아니면 InvalidInputError."""
+    if _is_json_array(path):
+        try:
+            with path.open(encoding=PYTHON_ENCODING["utf-8"]) as file:
+                items = json.load(file)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise InvalidInputError(
+                "JSON 파일을 읽지 못했습니다. 형식이 맞는지 확인하세요."
+            ) from None
+        for position, item in enumerate(items, start=1):
+            yield position, _json_object(item, position)
+        return
+    with path.open(encoding=PYTHON_ENCODING["utf-8"]) as file:
+        line_number = 0
+        try:
+            for line_number, line in enumerate(file, start=1):
+                if not line.strip():
+                    continue
+                yield line_number, _json_object(json.loads(line), line_number)
+        except json.JSONDecodeError:
+            raise InvalidInputError(
+                f"파일 {line_number}번째 줄을 JSON으로 읽지 못했습니다. "
+                "한 줄에 객체 하나인지 확인하세요."
+            ) from None
+        except UnicodeDecodeError:
+            raise InvalidInputError(
+                f"파일 {line_number + 1}번째 줄 근처에 읽을 수 없는 글자가 있습니다. "
+                "UTF-8로 저장해서 올려 주세요."
+            ) from None
+
+
+def _json_object(item: Any, line_number: int) -> dict[str, Any]:
+    """한 줄의 값이 객체인지 본다. 아니면 InvalidInputError."""
+    if not isinstance(item, dict):
+        raise InvalidInputError(f"파일 {line_number}번째 줄이 JSON 객체({{…}})가 아닙니다.")
+    return item
+
+
+def _is_json_array(path: Path) -> bool:
+    """파일이 '['로 시작하는지(객체 배열 JSON). 앞의 BOM · 공백은 건너뛴다."""
+    with path.open(encoding=PYTHON_ENCODING["utf-8"], errors="replace") as file:
+        while chunk := file.read(1024):
+            stripped = chunk.lstrip()
+            if stripped:
+                return stripped.startswith("[")
+    return False
 
 
 # ---------- 공통 ----------

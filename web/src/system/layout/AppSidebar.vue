@@ -8,7 +8,6 @@
 import {
   History,
   House,
-  MessageSquareText,
   Monitor,
   Moon,
   Plug,
@@ -35,9 +34,6 @@ const emit = defineEmits<{
 }>()
 
 const modules = useModules()
-
-// 아직 없는 모듈. 자리만 보인다.
-const PLANNED_MODULES: { icon: LucideIcon; label: string }[] = [{ icon: MessageSquareText, label: '생성 (LLM)' }]
 
 // 테마 버튼의 아이콘
 const THEME_ICONS: Record<Theme, LucideIcon> = { system: Monitor, light: Sun, dark: Moon }
@@ -116,17 +112,6 @@ const statusTooltip = computed(() => {
       <div class="caps px-2.5 pt-5 pb-1.5 rail:hidden">모듈</div>
       <div class="mx-2 my-3 hidden h-px bg-border rail:block" />
       <component :is="module.SidebarSection" v-for="module in modules" :key="module.id" />
-
-      <div class="pt-1">
-        <SidebarItem
-          v-for="planned in PLANNED_MODULES"
-          :key="planned.label"
-          :icon="planned.icon"
-          :label="planned.label"
-          note="예정"
-          disabled
-        />
-      </div>
     </nav>
 
     <div class="flex items-center gap-1 border-t px-3 pt-2 pb-3 rail:flex-col rail:px-2.5">

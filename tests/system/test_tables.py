@@ -1,5 +1,6 @@
-"""표 읽기 테스트 (DB 없이): 칸 값 맞추기, 열 이름, Parquet 읽기."""
+"""표 읽기 테스트 (DB 없이): 칸 값 맞추기, 열 이름, Parquet · jsonl 읽기."""
 
+import json
 import math
 from datetime import date
 
@@ -71,3 +72,63 @@ def test_open_table_fails_when_format_is_not_supported(tmp_path):
 
     # 확인
     assert caught.value.message == tables.UNSUPPORTED_FORMAT_MESSAGE
+
+
+def test_open_table_reads_jsonl_with_all_keys_and_nested_values_as_json(tmp_path):
+    # 준비: 줄마다 열쇠가 조금씩 다르고, messages는 목록이다. 빈 줄이 하나 끼어 있다.
+    path = tmp_path / "sft.jsonl"
+    lines = [
+        {"messages": [{"role": "user", "content": "안녕"}], "source": "a"},
+        {},
+        {"messages": [{"role": "user", "content": "잘 가"}], "id": 7},
+    ]
+    path.write_text(
+        json.dumps(lines[0], ensure_ascii=False)
+        + "\n\n"
+        + json.dumps(lines[2], ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    # 실행
+    table = tables.open_table(path, sheet=None)
+    rows = list(table.rows)
+
+    # 확인: 열은 모든 열쇠를 처음 나온 순서로, 없는 칸은 None, 목록은 JSON 글, 줄 번호는 파일 줄
+    assert table.format == "jsonl"
+    assert table.columns == ["messages", "source", "id"]
+    assert table.row_count == 2
+    assert [line for line, _values in rows] == [1, 3]
+    first = rows[0][1]
+    assert json.loads(first["messages"]) == [{"role": "user", "content": "안녕"}]
+    assert first["id"] is None
+    assert rows[1][1]["id"] == 7
+
+
+def test_open_table_reads_json_array_as_rows(tmp_path):
+    # 준비: Alpaca처럼 객체 배열 하나로 된 .json
+    path = tmp_path / "alpaca.json"
+    items = [
+        {"instruction": "요약해", "output": "요약"},
+        {"instruction": "번역해", "output": "번역"},
+    ]
+    path.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+
+    # 실행
+    table = tables.open_table(path, sheet=None)
+
+    # 확인
+    assert table.columns == ["instruction", "output"]
+    assert [values["instruction"] for _line, values in table.rows] == ["요약해", "번역해"]
+
+
+def test_open_table_fails_when_jsonl_line_is_broken(tmp_path):
+    # 준비: 두 번째 줄이 JSON이 아니다
+    path = tmp_path / "broken.jsonl"
+    path.write_text('{"a": 1}\n{"a": \n', encoding="utf-8")
+
+    # 실행
+    with pytest.raises(InvalidInputError) as caught:
+        tables.open_table(path, sheet=None)
+
+    # 확인
+    assert "2번째 줄" in caught.value.message

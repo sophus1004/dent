@@ -22,8 +22,13 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 from dent.modules.classification import examples as classification_examples
 from dent.modules.classification import jobs as classification_jobs
+from dent.modules.classification import service as classification_service
+from dent.modules.generation import examples as generation_examples
+from dent.modules.generation import jobs as generation_jobs
+from dent.modules.generation import service as generation_service
 from dent.modules.retrieval import examples as retrieval_examples
 from dent.modules.retrieval import jobs as retrieval_jobs
+from dent.modules.retrieval import service as retrieval_service
 from dent.system import connections, embedded_models, embedding, examples, exports, jobs
 from dent.system.checks import check_database, check_storage
 from dent.system.config import get_settings
@@ -57,6 +62,7 @@ JobHandler = Callable[[Job], Awaitable[None]]
 HANDLERS: dict[tuple[str, str], JobHandler] = {
     **classification_jobs.HANDLERS,  # 분류: 가져오기 · 의미 지도 · 도우미
     **retrieval_jobs.HANDLERS,  # 검색: 가져오기 · 뜻 분석 · 도우미 · 질의 만들기 · 오답 찾기 · 내보내기
+    **generation_jobs.HANDLERS,  # 생성: 가져오기 · 뜻 분석 · 도우미 · 내보내기
 }
 
 # (모듈, 작업 종류)별 뒷정리 함수. 너무 여러 번 끊겨 실패로 둔 작업을 모듈에 알려,
@@ -64,15 +70,20 @@ HANDLERS: dict[tuple[str, str], JobHandler] = {
 FAILURE_HANDLERS: dict[tuple[str, str], JobHandler] = {
     **classification_jobs.FAILURE_HANDLERS,  # 분류: 가져오기 · 의미 지도 · 도우미
     **retrieval_jobs.FAILURE_HANDLERS,  # 검색
+    **generation_jobs.FAILURE_HANDLERS,  # 생성
 }
 
 
-# 처음 실행할 때 한 번 넣는 모듈의 내장 예시. 모듈을 더하면 그 모듈의 examples.install_all을 한 줄 더한다
-# (모듈을 붙이는 곳 가운데 작업 실행기 쪽).
-FIRST_RUN_EXAMPLES: tuple[Callable[[AsyncSession], Awaitable[int]], ...] = (
-    classification_examples.install_all,  # 분류: 백과 문장 주제 · 문의 의도
-    retrieval_examples.install_all,  # 검색: 백과 문서 · 질문과 지문 · 질의와 오답 · 회사 규정과 FAQ
-)
+# 모듈마다 처음 실행할 때 한 번 넣는 내장 예시 (모듈 이름 → 그 모듈의 examples.install_all).
+# 모듈을 더하면 한 줄 더한다(모듈을 붙이는 곳 가운데 작업 실행기 쪽).
+FIRST_RUN_EXAMPLES: dict[str, Callable[[AsyncSession], Awaitable[int]]] = {
+    # 분류: 백과 문장 주제 · 문의 의도
+    classification_service.MODULE_NAME: classification_examples.install_all,
+    # 검색: 백과 문서 · 질문과 지문 · 질의와 오답 · 회사 규정과 FAQ
+    retrieval_service.MODULE_NAME: retrieval_examples.install_all,
+    # 생성: 지시 따르기 SFT · 고객 상담 대화
+    generation_service.MODULE_NAME: generation_examples.install_all,
+}
 
 
 @dataclass(frozen=True)
@@ -237,25 +248,29 @@ async def _recover_and_clean() -> None:
 
 
 async def _install_first_run_examples() -> int:
-    """처음 실행할 때 딱 한 번 모든 모듈의 내장 예시를 넣는다(외부 · 내장 DB 모두, 가져오기 작업으로). 넣기 시작한 수.
+    """모듈마다 처음 실행할 때 딱 한 번 그 모듈의 내장 예시를 넣는다(외부 · 내장 DB 모두, 가져오기 작업으로). 넣기 시작한 수.
 
-    한 번 한 DB는 표시(system_flags)가 있어 예시를 지워도 다시 넣지 않는다. 이 기능 전부터 데이터셋이 있던 DB는
-    쓰던 DB라 넣지 않고 표시만 남긴다. 실패하면 표시를 남기지 않아 다음에 실행할 때 다시 한다(실행은 막지 않는다).
+    표시(system_flags)는 모듈마다 있어, 한 번 한 모듈은 예시를 지워도 다시 넣지 않고 나중에 붙은 모듈은 그 모듈만 넣는다.
+    그 모듈의 데이터셋이 이미 있으면 쓰던 모듈이라 넣지 않고 표시만 남긴다. 실패한 모듈은 표시를 남기지 않아
+    다음에 실행할 때 다시 한다(실행은 막지 않는다).
     """
     started = 0
-    try:
-        async with get_sessionmaker()() as session:
-            if await examples.is_first_run_done(session):
-                return 0
-            is_fresh = not await examples.has_any_dataset(session)
-            if is_fresh:
-                for install_all in FIRST_RUN_EXAMPLES:
+    for module, install_all in FIRST_RUN_EXAMPLES.items():
+        try:
+            async with get_sessionmaker()() as session:
+                if await examples.is_first_run_done(session, module=module):
+                    continue
+                is_fresh = not await examples.has_any_dataset(session, module=module)
+                if is_fresh:
                     started += await install_all(session)
-            await examples.mark_first_run_done(session)
-            await session.commit()
-    except Exception:
-        logger.warning("내장 예시를 넣지 못했습니다. 다음에 실행할 때 다시 합니다.", exc_info=True)
-        return started
+                await examples.mark_first_run_done(session, module=module)
+                await session.commit()
+        except Exception:
+            logger.warning(
+                "%s 내장 예시를 넣지 못했습니다. 다음에 실행할 때 다시 합니다.",
+                module,
+                exc_info=True,
+            )
     if started:
         logger.info("처음 실행해서 내장 예시 %d개를 넣습니다(가져오기 작업).", started)
     return started

@@ -7,6 +7,7 @@ from fastapi import APIRouter
 
 from dent.api import connections, datasets, exports, helper, huggingface, imports, jobs, uploads
 from dent.modules.classification import router as classification
+from dent.modules.generation import router as generation
 from dent.modules.retrieval import router as retrieval
 
 api_router = APIRouter(prefix="/api/v1")
@@ -22,6 +23,7 @@ api_router.include_router(connections.router)
 api_router.include_router(helper.router)
 api_router.include_router(exports.router)
 
-# 모듈: 분류 (/api/v1/classification) · 검색 (/api/v1/retrieval)
+# 모듈: 분류 (/api/v1/classification) · 검색 (/api/v1/retrieval) · 생성 (/api/v1/generation)
 api_router.include_router(classification.router)
 api_router.include_router(retrieval.router)
+api_router.include_router(generation.router)

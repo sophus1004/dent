@@ -89,8 +89,8 @@ class FilePreviewRead(BaseModel):
     # 저장한 파일 이름
     file_name: str
 
-    # 형식: csv(.tsv 포함) · xlsx
-    format: Literal["csv", "xlsx"]
+    # 형식: csv(.tsv 포함) · xlsx · jsonl(.json 포함)
+    format: Literal["csv", "xlsx", "jsonl"]
 
     # 파일 크기(바이트)
     size_bytes: int

@@ -31,7 +31,7 @@ export interface FilePreviewRead {
   // 올린 파일의 번호(uuid4 hex). 가져오기를 만들 때 넘긴다.
   upload_id: string
   file_name: string
-  format: 'csv' | 'xlsx'
+  format: 'csv' | 'xlsx' | 'jsonl'
   size_bytes: number
   // CSV의 글자 인코딩. XLSX면 null
   encoding: 'utf-8' | 'cp949' | null

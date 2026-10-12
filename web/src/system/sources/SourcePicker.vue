@@ -248,7 +248,7 @@ onBeforeUnmount(() => {
             <span class="grid size-9 place-items-center rounded-lg bg-card shadow-[0_0_0_1px_var(--border)]">
               <Upload class="size-4" :class="isDragging ? 'text-primary' : 'text-muted-foreground'" />
             </span>
-            <span class="text-ui font-semibold">CSV · TSV · 엑셀(.xlsx)</span>
+            <span class="text-ui font-semibold">CSV · TSV · 엑셀(.xlsx) · JSONL</span>
             <span class="flex items-center gap-1 text-ui text-muted-foreground">
               {{ isDragging ? '놓기' : '끌어 놓기' }} ·
               <button

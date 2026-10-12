@@ -1,11 +1,11 @@
 """내장 예시 데이터의 바탕(모든 모듈): 설치하자마자 해 볼 수 있게 모듈이 저장소에 함께 둔 데이터셋.
 
-모듈은 자기 폴더의 `example_data/`에 예시 파일(csv · xlsx)과 정답지(`<열쇠>.answers.json`, 일부러 심은 문제와 그 수)를 두고
+모듈은 자기 폴더의 `example_data/`에 예시 파일(csv · xlsx · jsonl)과 정답지(`<열쇠>.answers.json`, 일부러 심은 문제와 그 수)를 두고
 예시 목록(Example)을 내놓는다. 넣기는 모듈이 보통 가져오기 길로 한다: 이 파일의 register_file로 예시 파일을 올린 파일처럼
 등록한 뒤 모듈의 create_import(작업 → 가져오기 → 반복 구간 살피기 …). 그래서 예시도 진단 · 가져온 기록이 사람이 올린 것과 같다.
 예시 파일은 `scripts/examples/build.py`가 원고(`scripts/examples/content/`)에 문제를 심어 만든다.
-처음 실행할 때 작업 실행기가 모든 모듈의 예시를 한 번 넣는다(표시는 system_flags, 이 파일의 is_first_run_done ·
-mark_first_run_done). 한 번 넣은 DB는 예시를 지워도 다시 넣지 않는다.
+처음 실행할 때 작업 실행기가 모듈마다 예시를 한 번 넣는다(표시는 system_flags에 모듈마다 하나, 이 파일의 is_first_run_done ·
+mark_first_run_done). 한 번 넣은 모듈은 예시를 지워도 다시 넣지 않고, 나중에 붙은 모듈은 그 모듈만 처음이라 넣는다.
 """
 
 import json
@@ -27,7 +27,8 @@ EXAMPLE_INSTALLED_MESSAGE = "이미 넣은 예시입니다. 다시 넣으려면 
 # 예시 파일을 올린 파일로 옮길 때 한 번에 읽는 크기 (올린 파일을 저장하는 것과 같은 조각 크기)
 READ_CHUNK_BYTES = 1024 * 1024
 
-# 처음 실행할 때 내장 예시를 넣었다(또는 쓰던 DB라 넣지 않기로 했다)는 표시 (system_flags의 key)
+# 처음 실행할 때 내장 예시를 넣었다(또는 쓰던 모듈이라 넣지 않기로 했다)는 표시의 앞머리.
+# system_flags의 key는 모듈마다 '앞머리:모듈 이름'이다(새 모듈이 붙어도 그 모듈의 예시는 한 번 들어가게).
 FIRST_RUN_FLAG = "first_run_examples"
 
 
@@ -44,7 +45,7 @@ class Example:
     # 데이터셋 설명 (무엇을 보여 주는 예시인지)
     description: str
 
-    # 모듈 example_data 폴더 안의 파일 이름 (csv · xlsx)
+    # 모듈 example_data 폴더 안의 파일 이름 (csv · xlsx · jsonl)
     file_name: str
 
     # 엑셀 시트 이름 (xlsx). 없으면 첫 시트.
@@ -125,17 +126,22 @@ async def list_examples(
     return items
 
 
-async def is_first_run_done(db: AsyncSession) -> bool:
-    """처음 실행할 때 할 예시 넣기를 이미 했는지(표시가 있는지)."""
-    return await db.get(Flag, FIRST_RUN_FLAG) is not None
+def first_run_flag(module: str) -> str:
+    """모듈의 '처음 실행할 때 예시 넣기' 표시 이름 (system_flags의 key)."""
+    return f"{FIRST_RUN_FLAG}:{module}"
 
 
-async def has_any_dataset(db: AsyncSession) -> bool:
-    """모듈과 상관없이 데이터셋이 하나라도 있는지 (예시 넣기 전부터 쓰던 DB인지 본다)."""
-    return await db.scalar(select(Dataset.id).limit(1)) is not None
+async def is_first_run_done(db: AsyncSession, *, module: str) -> bool:
+    """이 모듈의 처음 실행할 때 예시 넣기를 이미 했는지(표시가 있는지)."""
+    return await db.get(Flag, first_run_flag(module)) is not None
 
 
-async def mark_first_run_done(db: AsyncSession) -> None:
-    """처음 실행할 때 할 예시 넣기를 했다고 표시한다. 커밋은 부른 쪽이 한다."""
-    if not await is_first_run_done(db):
-        db.add(Flag(key=FIRST_RUN_FLAG))
+async def has_any_dataset(db: AsyncSession, *, module: str) -> bool:
+    """이 모듈의 데이터셋이 하나라도 있는지 (예시 넣기 전부터 쓰던 모듈인지 본다)."""
+    return await db.scalar(select(Dataset.id).where(Dataset.module == module).limit(1)) is not None
+
+
+async def mark_first_run_done(db: AsyncSession, *, module: str) -> None:
+    """이 모듈의 처음 실행할 때 예시 넣기를 했다고 표시한다. 커밋은 부른 쪽이 한다."""
+    if not await is_first_run_done(db, module=module):
+        db.add(Flag(key=first_run_flag(module)))

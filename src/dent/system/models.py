@@ -594,7 +594,7 @@ class Flag(Base):
 
     __tablename__ = "system_flags"
 
-    # 표시 이름 (예: first_run_examples). 일마다 하나라서 이것이 번호다.
+    # 표시 이름 (예: first_run_examples:classification). 일마다 하나라서 이것이 번호다.
     key: Mapped[str] = mapped_column(Text, primary_key=True)
 
     # 한 시각
