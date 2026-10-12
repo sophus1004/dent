@@ -7,6 +7,7 @@
 
 import atexit
 import os
+import secrets
 import shutil
 import tempfile
 from collections.abc import AsyncIterator, Callable, Iterator
@@ -29,7 +30,11 @@ if not _test_database_url:
     # 설정을 읽지 않는 모듈이라 DATABASE_URL을 바꾸기 전에 불러도 된다
     from dent.system import embedded_db
 
-    _embedded_test_dir = Path(tempfile.mkdtemp(prefix="dent-test-pg-"))
+    # tempfile.mkdtemp는 쓰지 않는다: Windows(Python 3.12.4+)에서 만든 사람만 여는 권한을 걸어, 관리자 권한을
+    # 내려놓고 도는 initdb가 그 안의 pgdata를 열지 못하고 '이미 있음'으로 실패했다(CI Windows).
+    # 일반 폴더는 임시 폴더의 권한을 물려받는다.
+    _embedded_test_dir = Path(tempfile.gettempdir()) / f"dent-test-pg-{secrets.token_hex(6)}"
+    _embedded_test_dir.mkdir()
     _test_database_url = embedded_db.ensure_running_at(
         _embedded_test_dir / "pgdata", database="dent_test"
     )
