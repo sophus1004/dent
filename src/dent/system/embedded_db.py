@@ -9,6 +9,8 @@
   강제로 끝나면 종료하지 못해서 쓰지 않는다. 강제로 끝나 서버가 남아 있으면 다음에 실행할 때 그 서버에 붙는다.
 """
 
+import getpass
+import os
 import subprocess
 from pathlib import Path
 
@@ -29,6 +31,12 @@ START_FAILED_MESSAGE = (
     "관리자(root · Administrator) 권한으로 실행하면 PostgreSQL이 거부합니다."
 )
 
+# Windows인지. 새 데이터 폴더에 지금 사용자 계정의 권한을 따로 준다(_prepare_pgdata).
+IS_WINDOWS = os.name == "nt"
+
+# Windows에서 새 데이터 폴더에 지금 사용자 계정에게 주는 권한(icacls): 아래 폴더 · 파일에 물려주는 모든 권한
+WINDOWS_GRANT = "(OI)(CI)F"
+
 # 실행하거나 붙은 서버의 주소 (데이터 폴더마다). 한 프로세스에서 여러 번 물어도 한 번만 확인한다.
 _urls: dict[Path, str] = {}
 
@@ -48,7 +56,7 @@ def ensure_running_at(pgdata: Path, *, database: str = DATABASE_NAME) -> str:
     if cached is not None and (pgdata / "postmaster.pid").exists():
         return cached
     try:
-        pgdata.parent.mkdir(parents=True, exist_ok=True)
+        _prepare_pgdata(pgdata)
         server = embedded_postgres.get_server(pgdata, cleanup_mode=None)
         _ensure_database(server.get_uri(), database=database)
         _run_sql(server.get_uri(database), "CREATE EXTENSION IF NOT EXISTS vector")
@@ -85,6 +93,27 @@ def stop_at(pgdata: Path) -> bool:
     except subprocess.CalledProcessError:
         return False
     return True
+
+
+def _prepare_pgdata(pgdata: Path) -> None:
+    """데이터 폴더의 부모를 만든다. Windows에서 아직 DB를 만들지 않은 폴더면 지금 사용자 계정에 모든 권한을 준다.
+
+    관리자 터미널(GitHub Actions의 Windows도)에서 만든 폴더는 소유자가 Administrators 그룹이라, 관리자 권한을 내려놓고
+    도는 initdb가 그 폴더의 권한을 바꾸지 못하고 Permission denied로 멈췄다. 권한을 못 주면 그대로 두고 initdb가 까닭을 알린다.
+    """
+    pgdata.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not (pgdata / "PG_VERSION").exists()
+    if not (IS_WINDOWS and is_new):
+        return
+    pgdata.mkdir(exist_ok=True)
+    domain = os.environ.get("USERDOMAIN")
+    user = getpass.getuser()
+    account = f"{domain}\\{user}" if domain else user
+    subprocess.run(
+        ["icacls", str(pgdata), "/grant", f"{account}:{WINDOWS_GRANT}", "/T", "/Q"],
+        check=False,
+        capture_output=True,
+    )
 
 
 def _ensure_database(admin_uri: str, *, database: str) -> None:
