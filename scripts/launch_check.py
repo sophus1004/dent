@@ -10,6 +10,7 @@ Windows · macOS · Linux에서 같은 명령으로 잰다. 여러 OS를 확인�
 """
 
 import argparse
+import io
 import json
 import os
 import shutil
@@ -46,6 +47,9 @@ IS_WINDOWS = sys.platform == "win32"
 
 
 def main() -> int:
+    # 이 스크립트의 출력(한국어 · '→')을 UTF-8로 쓴다. Windows CI 콘솔은 cp1252라 '→'에서 멈췄다(로그는 UTF-8로 읽힌다).
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="DENT 실행과 종료 확인")
     parser.add_argument("--model", action="store_true", help="내장 임베딩을 CPU에 올려 본다")
     args = parser.parse_args()
