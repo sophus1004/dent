@@ -850,7 +850,9 @@ async def _open_ids(db: AsyncSession, *, dataset_id: int, check: CheckKey) -> An
 
 def _problem_condition(dataset_id: int, check: CheckKey, analysis_id: int | None) -> Any:
     """목록의 문제 거르기 조건. 글의 모양 검사는 칸으로 바로, 해시 · 뜻 · 대조 · 쌍 검사는 번호 쿼리로."""
-    if check in rules.MARK_CHECKS and check != CheckKey.DUPLICATE:
+    # 글의 표시(marks)로 남는 검사만 칸으로 바로 거른다. 같은 지시 · 응답 없음은 표시가 아니다.
+    is_mark = check in rules.MARK_CHECKS and check not in (CheckKey.DUPLICATE, CheckKey.NO_ANSWER)
+    if is_mark:
         return has_open(check.value)
     if CHECKS[check].unit == "pair":
         pair_prompts = (

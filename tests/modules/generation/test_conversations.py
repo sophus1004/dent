@@ -98,6 +98,21 @@ async def test_conversation_without_answer_shows_no_answer_problem(client, db_se
     assert [problem["key"] for problem in body["problems"]] == ["no_answer"]
 
 
+async def test_list_filters_conversations_without_answer(client, db_session):
+    # 준비
+    dataset_id = await _prompts_dataset(db_session)
+
+    # 실행
+    found = await client.get(
+        f"{API}/datasets/{dataset_id}/conversations", params={"problem": "no_answer"}
+    )
+    review = await client.get(f"{API}/datasets/{dataset_id}/review", params={"check": "no_answer"})
+
+    # 확인: 응답 없음은 표시(marks)가 아니어도 거르기 · 검토 큐에 둘 다 든다
+    assert found.json()["total"] == 2
+    assert review.json()["total"] == 2
+
+
 async def test_decide_answer_writes_synthetic_answer_and_undo_removes_it(
     client, db_session, monkeypatch
 ):

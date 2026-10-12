@@ -132,7 +132,7 @@ async def test_mismatch_skips_conversations_explained_by_other_checks(client, db
     assert queue.json()["ids"] == [ids[0]]
 
 
-async def test_mismatch_in_multi_turn_is_only_a_suspect(client, db_session):
+async def test_mismatch_in_multi_turn_or_code_answer_is_only_a_suspect(client, db_session):
     # 준비: 한 턴 · 여러 턴 대화 모두 마지막 응답이 엉뚱하다(Jev가 '따르지 않음')
     multi = [
         {"role": "user", "content": "서울의 인구는?"},
@@ -140,7 +140,10 @@ async def test_mismatch_in_multi_turn_is_only_a_suspect(client, db_session):
         {"role": "user", "content": "부산은요?"},
         {"role": "assistant", "content": "엉뚱한 날씨 이야기입니다."},
     ]
-    rows = [conversation("파이썬 코드로 정렬해 줘", "엉뚱한 날씨 이야기입니다."), multi]
+    code = conversation(
+        "짝수만 고르는 함수를 써 줘", "```python\ndef pick(xs):  # 엉뚱\n    return xs\n```"
+    )
+    rows = [conversation("파이썬 코드로 정렬해 줘", "엉뚱한 날씨 이야기입니다."), multi, code]
     finished = await import_file(db_session, jsonl_bytes(messages_rows(rows)))
     ids = sorted(await _ids(db_session, finished.dataset_id))
     await connect_models(db_session)
@@ -157,9 +160,10 @@ async def test_mismatch_in_multi_turn_is_only_a_suspect(client, db_session):
         )
     ).all()
 
-    # 확인: Jev가 앞 턴을 잇는 말을 잘 읽지 못해 여러 턴은 진단에 세지 않고 의심(도우미의 LLM이 본다)으로 둔다
+    # 확인: Jev가 앞 턴을 잇는 말 · 코드만 있는 답을 잘 읽지 못해 여러 턴 · 코드 응답은 진단에 세지 않고
+    # 의심(도우미의 LLM이 본다)으로 둔다
     assert _check(overview, "mismatch")["count"] == 1
-    assert list(suspects) == [ids[1]]
+    assert list(suspects) == [ids[1], ids[2]]
 
 
 async def test_analysis_builds_for_prompts_without_answer_and_preference_pairs(db_session):
