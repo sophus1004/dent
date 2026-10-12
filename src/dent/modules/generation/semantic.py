@@ -380,9 +380,14 @@ async def judgments_for(
     return {judgment.prompt_id: judgment for judgment in found}
 
 
-async def forget_judgments(db: AsyncSession, *, prompt_id: int) -> None:
-    """글이 바뀐 대화의 Jev 판정(대화 · 그 지시의 선호 쌍)을 지운다(옛 글의 판정이라서). 커밋은 부른 쪽이 한다."""
+async def forget_judgments(db: AsyncSession, *, prompt_id: int, keep_pairs: bool = False) -> None:
+    """글이 바뀐 대화의 Jev 판정(대화 · 그 지시의 선호 쌍)을 지운다(옛 글의 판정이라서). 커밋은 부른 쪽이 한다.
+
+    keep_pairs면 대화의 판정만 지운다(쌍을 뒤집어 주 응답만 바뀌었을 때: 응답마다의 쌍 판정은 그대로 맞다).
+    """
     await db.execute(delete(Judgment).where(Judgment.prompt_id == prompt_id))
+    if keep_pairs:
+        return
     await db.execute(
         update(Pair)
         .where(Pair.prompt_id == prompt_id)

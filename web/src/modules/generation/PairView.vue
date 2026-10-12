@@ -3,7 +3,7 @@
     지시      ConversationView를 맥락만으로(주 응답을 빼고) 그린다
     판정 줄   Jev 따름 고른 n · 버린 n (응답마다 따로 물은 점수) · 길이 n : n자 · 출처(원본 · 합성) · 남은 쌍 문제 칩
     두 칸     고른 응답(초록 머리) · 버린 응답(빨강 머리). 주 응답(SFT에 쓰는 것)에 '주 응답' 태그. 원본 점수가 있으면 머리에.
-  칸의 폭이 40rem보다 좁으면(도우미 창을 옆에 둘 때) 두 응답을 위아래로 쌓는다(@container).
+  칸의 폭이 30rem보다 좁으면(도우미 창을 옆에 둘 때) 두 응답을 위아래로 쌓는다(@container).
   글을 HTML로 그리지 않는다. 코드 울타리(```) 안은 고정폭으로 그린다.
 -->
 <script setup lang="ts">
@@ -81,7 +81,7 @@ const HEAD_TONE: Record<string, string> = {
         <component :is="checkWords(key).icon" class="size-3" />{{ checkWords(key).name }}
       </span>
     </div>
-    <div class="grid gap-3 @min-[40rem]:grid-cols-2">
+    <div class="grid gap-3 @min-[30rem]:grid-cols-2">
       <div
         v-for="column in columns"
         :key="column.key"

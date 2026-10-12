@@ -81,6 +81,7 @@ import type {
   Grade,
   NearPartnerRead,
   OverviewRead,
+  Unit,
 } from '@/modules/generation/types'
 import WhoTag from '@/modules/generation/WhoTag.vue'
 
@@ -134,8 +135,10 @@ const checkKey = computed<CheckKey | null>(() => {
   return typeof asked === 'string' && asked in CHECK_WORDS ? (asked as CheckKey) : null
 })
 const check = computed<CheckRead | null>(() => overview.value?.checks.find((item) => item.key === checkKey.value) ?? null)
+// 큐 번호의 단위 (큐를 읽으면 서버가 알려 준다). 진단을 읽기 전에 큐가 먼저 오면 이것으로 쌍인지 안다.
+const queueUnit = ref<Unit | null>(null)
 // 쌍 검사면 큐가 쌍 번호다
-const isPairCheck = computed(() => check.value?.unit === 'pair')
+const isPairCheck = computed(() => (queueUnit.value ?? check.value?.unit) === 'pair')
 // 그대로 둔 것만 보는지 (주소 ?kept=1)
 const keptMode = computed(() => route.query.kept === '1')
 const grades = computed(() =>
@@ -294,6 +297,7 @@ async function loadQueue(): Promise<void> {
   const key = checkKey.value
   ids.value = []
   queueTotal.value = 0
+  queueUnit.value = null
   position.value = 0
   decided.value = new Map()
   conversation.value = null
@@ -302,6 +306,7 @@ async function loadQueue(): Promise<void> {
   try {
     const queue = await getReviewQueue(datasetId.value, key, undefined, keptMode.value)
     if (key !== checkKey.value) return
+    queueUnit.value = queue.unit
     ids.value = queue.ids
     queueTotal.value = queue.total
   } catch (error) {

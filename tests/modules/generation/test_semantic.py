@@ -241,6 +241,21 @@ async def test_reversed_pair_is_fixed_in_preference_stage_not_counted_as_mismatc
     assert _check(overview, "mismatch")["count"] == 0
     assert _check(overview, "judge_reversed")["count"] == 1
 
+    # 실행: 뒤집으면 주 응답이 맞는 응답으로 바뀐다
+    [pair_id] = (
+        await client.get(
+            f"{API}/datasets/{finished.dataset_id}/review", params={"check": "judge_reversed"}
+        )
+    ).json()["ids"]
+    await client.post(
+        f"{API}/pairs/{pair_id}/decide", json={"check": "judge_reversed", "action": "flip"}
+    )
+    after = (await client.get(f"{API}/datasets/{finished.dataset_id}/overview")).json()
+
+    # 확인: 옛 주 응답의 판정이 지워져 지시 불일치로 다시 뜨지 않고, 쌍 판정은 그대로라 판정 반대도 풀린다
+    assert _check(after, "mismatch")["count"] == 0
+    assert _check(after, "judge_reversed")["count"] == 0
+
 
 def json_questions(transport) -> set[str]:
     """가짜 Jev가 받은 질문 이름들."""

@@ -865,7 +865,8 @@ class Helper(Agent):
                 Action.DROP,
                 [refs[ref].prompt.id for ref in off],
                 tool="llm:fits",
-                samples=[f"{_sample(refs[ref])} · {why}" for ref, why in off.items()],
+                # 빼는 까닭을 보기로 (지시는 대화 패널에서 본다)
+                samples=[why or _sample(refs[ref]) for ref, why in off.items()],
             )
             if held:
                 await helper_service.add_usage(self.db, run_id=self.run_id, held=held)

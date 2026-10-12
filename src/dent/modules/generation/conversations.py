@@ -1060,6 +1060,8 @@ async def _flip(db: AsyncSession, pair: Pair) -> None:
         await db.execute(update(Response).where(Response.id == old_chosen).values(is_main=False))
         await db.flush()
         await db.execute(update(Response).where(Response.id == old_rejected).values(is_main=True))
+        # 주 응답이 바뀌었으니 옛 주 응답으로 한 대화 판정(지시 불일치 · 안전)은 맞지 않는다.
+        await semantic.forget_judgments(db, prompt_id=pair.prompt_id, keep_pairs=True)
     await db.flush()
 
 
