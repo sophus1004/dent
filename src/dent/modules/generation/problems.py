@@ -5,6 +5,7 @@
 - 근접 중복: 다 만든 뜻 분석의 근접 중복 쌍에서, 번호가 더 작은 짝이 휴지통 밖에 있는 대화(여분).
 - 지시 불일치: 다 만든 뜻 분석에서 Jev가 '따르지 않음'을 확인한 한 턴 · 글 응답 대화. 까닭이 다른 검사로 드러난 대화는 뺀다.
   Jev가 애매하게 본 것(따름 0.2~0.5)과 여러 턴 · 코드 응답의 '따르지 않음'은 '의심'이라 진단에 세지 않고 도우미의 LLM이 본다.
+  선호 쌍의 판정 반대가 남은 대화(엉뚱한 응답이 고른 쪽)는 세지 않는다(3 선호에서 뒤집는다).
 - 응답 없음: 주 응답이 없는 대화(지시만). 오염: 평가셋과 겹친 대화. 안전: Jev가 해롭다고 본 응답.
 - 3 선호(쌍 번호): 같은 쌍 · 동점(쌍 표시), 판정 반대 · 작은 마진(Jev가 두 응답을 따로 본 따름 점수).
 모두 휴지통 밖만 보고, 사람이 '그대로 두기'로 둔 검사는 뺀다. 번호 순.
@@ -66,6 +67,16 @@ SMALL_MARGIN = 0.1
 
 # 판정 반대: 버린 응답의 따름 점수가 고른 응답보다 이만큼 이상 높으면 라벨이 뒤집혔을 수 있다
 REVERSED_MARGIN = 0.3
+
+def _has_reversed_pair() -> Any:
+    """판정 반대가 남은 쌍이 있는 대화 (주 응답 = 고른 응답이 엉뚱할 때: 3 선호에서 뒤집어 고친다)."""
+    return exists().where(
+        Pair.prompt_id == Prompt.id,
+        PAIR_IS_ACTIVE,
+        Pair.judge_chosen - Pair.judge_rejected <= -REVERSED_MARGIN,
+        not_(Pair.kept.contains([CheckKey.JUDGE_REVERSED.value])),
+    )
+
 
 # 지시를 따르지 않는 까닭이 이 검사들로 이미 드러난 대화(빈 지시 · 거절 · 짧은 · 빈 · 잘린 응답 …)는 지시 불일치로 세지 않는다.
 # 한 문제를 두 검사가 두 번 고치지 않게 하고, 사람이 '그대로 두기'로 둔 거절이 지시 불일치로 다시 뜨지 않게 한다.
@@ -144,6 +155,8 @@ def mismatch_ids(dataset_id: int, analysis_id: int) -> Select[tuple[int]]:
             not_(IS_JEV_WEAK),
             # 표시(marks)는 '그대로 두기'로 둔 검사도 남아 있어, 둔 거절도 여기서 빠진다.
             not_(or_(*(Prompt.marks.has_key(key.value) for key in EXPLAINED_MISMATCH))),
+            # 선호 쌍의 판정 반대가 까닭이면(엉뚱한 응답을 고른 쪽에 둠) 3 선호에서 뒤집어 고친다.
+            not_(_has_reversed_pair()),
         )
         .order_by(Prompt.id)
     )
@@ -165,6 +178,7 @@ def mismatch_suspect_ids(dataset_id: int, analysis_id: int) -> Select[tuple[int]
             or_(Judgment.follows > 1 - judging.CONFIRM_PROBABILITY, IS_JEV_WEAK),
             Judgment.follows <= MISMATCH_SUSPECT_FOLLOWS,
             not_(or_(*(Prompt.marks.has_key(key.value) for key in EXPLAINED_MISMATCH))),
+            not_(_has_reversed_pair()),
         )
         .order_by(Prompt.id)
     )

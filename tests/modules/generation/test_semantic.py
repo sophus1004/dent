@@ -207,6 +207,41 @@ async def test_analysis_builds_for_prompts_without_answer_and_preference_pairs(d
     assert second.done is not None and second.run is None
 
 
+async def test_reversed_pair_is_fixed_in_preference_stage_not_counted_as_mismatch(
+    client, db_session
+):
+    # 준비: 고른 응답이 엉뚱하고 버린 응답이 맞는 쌍(판정 반대)
+    finished = await import_file(
+        db_session,
+        jsonl_bytes(
+            [
+                {
+                    "chosen": [
+                        {"role": "user", "content": "김치찌개 레시피 알려줘"},
+                        {"role": "assistant", "content": "엉뚱한 날씨 이야기입니다."},
+                    ],
+                    "rejected": [
+                        {"role": "user", "content": "김치찌개 레시피 알려줘"},
+                        {"role": "assistant", "content": "레시피: 김치를 볶고 물을 붓습니다."},
+                    ],
+                }
+            ]
+        ),
+        mapping={"shape": "preference", "chosen": "chosen", "rejected": "rejected"},
+    )
+    await connect_models(db_session)
+
+    # 실행
+    await build_analysis(
+        db_session, dataset_id=finished.dataset_id, jev_transport=judge_transport()
+    )
+    overview = (await client.get(f"{API}/datasets/{finished.dataset_id}/overview")).json()
+
+    # 확인: 주 응답(고른 응답)이 엉뚱해도 지시 불일치로 세지 않고 판정 반대로 3 선호에서 뒤집게 둔다
+    assert _check(overview, "mismatch")["count"] == 0
+    assert _check(overview, "judge_reversed")["count"] == 1
+
+
 def json_questions(transport) -> set[str]:
     """가짜 Jev가 받은 질문 이름들."""
     return {
