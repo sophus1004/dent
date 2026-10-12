@@ -21,6 +21,7 @@ from dent.modules.generation.models import (
     Pair,
     Prompt,
     Response,
+    Source,
 )
 from dent.modules.generation.rules import CheckKey
 from dent.modules.generation.schemas import ImportCreate
@@ -224,12 +225,18 @@ async def find_settings(db: AsyncSession, *, dataset_id: int) -> DatasetSettings
 
 
 async def entry_stage(db: AsyncSession, *, dataset_id: int) -> int:
-    """흐름의 입구: 선호 쌍이 있으면 3, 주 응답이 있는 대화가 있으면 2, 지시만이면 1."""
-    has_pairs = await db.scalar(select(exists().where(Pair.dataset_id == dataset_id)))
+    """흐름의 입구(가져온 모양): 원본 선호 쌍이 있으면 3, 원본 응답이 있으면 2, 지시만이면 1.
+
+    원본(가져온 것)으로만 본다. 응답 만들기 · 비교 만들기로 늘어난 것은 입구를 바꾸지 않는다.
+    """
+    original = Source.ORIGINAL.value
+    has_pairs = await db.scalar(
+        select(exists().where(Pair.dataset_id == dataset_id, Pair.source == original))
+    )
     if has_pairs:
         return ENTRY_PAIRS
     has_answers = await db.scalar(
-        select(exists().where(Prompt.dataset_id == dataset_id, HAS_MAIN_ANSWER))
+        select(exists().where(Response.dataset_id == dataset_id, Response.source == original))
     )
     has_prompts = await db.scalar(select(exists().where(Prompt.dataset_id == dataset_id)))
     return ENTRY_ANSWERS if has_answers or not has_prompts else ENTRY_PROMPTS

@@ -127,6 +127,7 @@ async def test_decide_answer_writes_synthetic_answer_and_undo_removes_it(
         f"{API}/conversations/{conversation_id}/decide",
         json={"check": "no_answer", "action": "answer"},
     )
+    entry_after_answer = (await client.get(f"{API}/datasets/{dataset_id}")).json()["entry_stage"]
     undone = await client.post(f"{API}/changes/{decided.json()['change']['id']}/undo")
 
     # 확인: 만든 응답은 주 응답 · 출처 합성이고, 되돌리면 응답이 지워져 다시 응답 없음
@@ -136,8 +137,11 @@ async def test_decide_answer_writes_synthetic_answer_and_undo_removes_it(
     assert body["messages"][-1]["content"] == WRITTEN
     assert body["source"] == "synthetic"
     assert body["problems"] == []
+    assert entry_after_answer == 1
     assert undone.json()["has_answer"] is False
     assert await db_session.scalar(select(Response.id)) is None
+    # 입구는 가져온 모양(지시만) 그대로다(응답을 만들어도 바뀌지 않는다).
+    assert (await client.get(f"{API}/datasets/{dataset_id}")).json()["entry_stage"] == 1
 
 
 async def test_decide_answer_returns_422_without_llm(client, db_session):
