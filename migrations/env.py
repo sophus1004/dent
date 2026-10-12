@@ -1,5 +1,9 @@
 """Alembic 실행 환경. DB 주소는 .env의 DATABASE_URL에서(없으면 내장 DB를 켜거나 떠 있는 서버에 붙어서),
-테이블 목록은 dent.models에서 읽는다."""
+테이블 목록은 dent.models에서 읽는다. alembic.ini의 sqlalchemy.url은 쓰지 않는다.
+
+alembic.ini에는 ASCII만 둔다: alembic이 그 파일을 시스템 기본 인코딩으로 읽어, 한국어 주석 한 줄 때문에
+Windows(cp1252 · cp949)에서 테이블 올리기가 실패했다.
+"""
 
 import asyncio
 from logging.config import fileConfig

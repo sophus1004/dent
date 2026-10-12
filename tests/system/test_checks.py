@@ -105,3 +105,11 @@ async def test_check_schema_fails_when_database_is_newer_than_code():
 
     # 확인
     assert "새 버전" in caught.value.message
+
+
+def test_alembic_ini_is_ascii_so_any_windows_locale_can_read_it():
+    # 실행: alembic은 alembic.ini를 시스템 기본 인코딩(Windows는 cp1252 · cp949)으로 읽는다
+    content = ALEMBIC_INI.read_bytes()
+
+    # 확인
+    assert content.isascii()
