@@ -8,7 +8,8 @@
                 → 짧은 응답 → 지시 불일치 → 안전.
                 응답 만들기는 응답이 없는 지시(지시만)에 LLM이 응답을 쓴다. 시험 몇 건과 비용 어림을 보이고 허락을 받는다.
                 거절 · 짧은 응답은 Jev가 괜찮다고 본 것을 규칙으로 그대로 두고, 남은 것만 LLM이 본다.
-                지시 불일치는 Jev가 확인한 것(따름 ≤ 0.2)과 애매하게 본 의심(0.2~0.5)을 LLM이 빼기 · 그대로 두기 · 보류로 고른다.
+                지시 불일치는 Jev가 확인한 것(따름 ≤ 0.2)과 의심(0.2~0.5 · 여러 턴 · 코드 응답)을 LLM이 대화마다
+                '마지막 말에 맞게 답했나'로 판정한다(Jev 점수를 보이지 않는다): 맞음 그대로 · 다름 빼기 · 모름 보류.
                 안전은 Jev가 해롭다고 본 응답을 LLM이 한 번 더 본다.
   (문)          선호 단계 앞.
   3 선호        비교 만들기(허락) → 같은 쌍 · 동점(쌍 빼기) → 판정 반대(LLM이 뒤집기 · 그대로 두기 · 쌍 빼기 · 보류).
@@ -27,6 +28,7 @@
 실행 전체이고, 사람의 검토 결정 기록에서도 한 건씩 되돌릴 수 있다. 영구 삭제는 없다.
 """
 
+import json
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
@@ -122,6 +124,28 @@ REWRITE_CHUNK = 5
 # 응답 · 비교 만들기를 이만큼 할 때마다 카드 하나로 반영한다(LLM 요청은 making.MAKE_CONCURRENCY건씩 함께)
 MAKE_CHUNK = 8
 
+# 지시 불일치를 LLM이 대화마다 판정할 때 한 번에 보이는 수 · 한 번 실행에 보는 최대 수 · 답의 최대 토큰
+VERDICT_BATCH = 12
+MAX_VERDICTS = 60
+VERDICT_MAX_TOKENS = 2_000
+
+# 판정할 때 보이는 앞 턴 수 · 턴마다 글자 수 · 마지막 응답 글자 수
+VERDICT_TURNS = 5
+VERDICT_TURN_CHARS = 200
+VERDICT_ANSWER_CHARS = 400
+
+# 지시 불일치 판정 지시. Jev 점수와 '의심'이라는 말을 보이지 않는다: 보이면 LLM이 그쪽으로 끌려 맞는 여러 턴 답을
+# 빼곤 했다(상담 대화 11건 중 6~8건). 중립적으로 물으면 같은 모델이 예시의 맞는 답 · 바꿔 단 답을 모두 맞혔다(19 / 19).
+VERDICT_SYSTEM = """아래는 학습 데이터의 대화들이다. 대화마다 마지막 응답이 마지막 사용자 말에 알맞은 답인지 판단한다.
+앞 턴의 흐름을 함께 읽는다(짧은 후속 말 · 번호만 준 말도 앞 턴을 이어 받는 말이다).
+답은 JSON 목록만: [{"ref": "r1", "fits": "yes|no|unsure", "why": "한 줄"}]
+- yes: 마지막 말에 맞게 답했다(완벽하지 않아도 대화로 자연스러우면 yes)
+- no: 마지막 말과 다른 것을 답했거나 무시했다
+- unsure: 판단할 근거가 모자라다"""
+
+# 판정의 역할 낱말
+VERDICT_ROLES = {Role.USER: "사용자", Role.ASSISTANT: "응답", Role.TOOL: "도구 결과"}
+
 # 비교 만들기 한 건에 Jev에 묻는 수 (두 응답을 따로)
 JEV_CALLS_PER_PAIR = 2
 
@@ -196,6 +220,9 @@ class StepDef:
     # 뜻 분석에 기대는 단계인지 (분석에 없는 새 응답이 있으면 분석을 다시 만든 뒤 돈다)
     needs_analysis: bool = False
 
+    # LLM이 도구 대신 대화마다 '맞게 답했나'를 판정하는 단계인지 (지시 불일치)
+    verdict: bool = False
+
     @property
     def check(self) -> CheckKey | None:
         """단계가 고치는 검사 (비교 만들기는 None)."""
@@ -264,11 +291,11 @@ STEPS: tuple[StepDef, ...] = (
     StepDef(
         CheckKey.MISMATCH,
         2,
-        goal="Jev가 응답이 지시를 따르지 않는다고 본 대화다(확인 = Jev 따름 0.2 이하, 의심 = 0.2~0.5). Jev는 자주 틀린다: "
-        "앞 턴을 잇는 짧은 말('그럼 부산은요?' · 주문 번호), 코드만 있는 답, 시 · 분류 답을 따르지 않는다고 볼 때가 많다. "
-        "앞 턴까지 대화를 읽고, 응답이 마지막 사용자 말에 맞게 답하면 keep. 마지막 말과 전혀 다른 것을 답했을 때만 drop. "
-        "판단이 갈리면 hold.",
+        "",
+        "응답이 지시를 따르지 않는다고 Jev가 본 대화가 맞게 답했나?\n"
+        "Jev 점수를 보이지 않고 LLM이 대화마다 판정한다. 다르면 빼고, 맞으면 두고, 모르면 사람에게.",
         needs_analysis=True,
+        verdict=True,
     ),
     StepDef(
         CheckKey.UNSAFE,
@@ -726,6 +753,10 @@ class Helper(Agent):
             )
         if step.goal and await self._step_count(step) > 0:
             state.facts["llm"] += await self._judge(state, goal=step.goal)
+        if step.verdict:
+            if not step.rule:
+                await self.say(step.rule_say)
+            state.facts["llm"] += await self._judge_fits(state)
         await self._finish_step(step, state, before, started)
         return STEP_DONE
 
@@ -785,6 +816,62 @@ class Helper(Agent):
             brief=brief,
             tools=self._judge_tools(state),
         )
+
+    async def _judge_fits(self, state: StepState) -> int:
+        """지시 불일치(확인 · 의심)를 LLM이 대화마다 '마지막 말에 맞게 답했나'로 판정한다(VERDICT_BATCH건씩).
+
+        맞음은 그대로 두고, 다름은 빼고, 모름 · 답을 읽지 못한 것은 사람에게 넘긴다. 쓴 토큰.
+        """
+        ids = (await self._candidates(state.key))[:MAX_VERDICTS]
+        used = 0
+        for start in range(0, len(ids), VERDICT_BATCH):
+            await self.check_stop()
+            items = await conversations.items_of(
+                self.db, dataset_id=self.dataset_id, ids=ids[start : start + VERDICT_BATCH]
+            )
+            items = [item for item in items if item.answer is not None]
+            if not items:
+                continue
+            refs = {f"r{index}": item for index, item in enumerate(items, start=1)}
+            reply = await self.chat(
+                [
+                    ChatMessage(role="system", content=VERDICT_SYSTEM),
+                    ChatMessage(
+                        role="user",
+                        content="\n\n".join(_verdict_line(ref, item) for ref, item in refs.items()),
+                    ),
+                ],
+                [],
+                max_tokens=VERDICT_MAX_TOKENS,
+            )
+            used += reply.input_tokens + reply.output_tokens
+            verdicts = _read_verdicts(reply.content)
+            fits = [
+                refs[ref].prompt.id
+                for ref, (fit, _why) in verdicts.items()
+                if ref in refs and fit == "yes"
+            ]
+            off = {ref: why for ref, (fit, why) in verdicts.items() if ref in refs and fit == "no"}
+            held = len(items) - len(fits) - len(off)
+            await self.say(
+                f"대화 {len(items)}건이 마지막 말에 맞게 답했나?\n"
+                f"맞음 {len(fits)} · 다름 {len(off)} · 모름 {held}"
+            )
+            state.facts["changed"] += await self._record(
+                state.key, Action.KEEP, fits, tool="llm:fits"
+            )
+            state.facts["changed"] += await self._record(
+                state.key,
+                Action.DROP,
+                [refs[ref].prompt.id for ref in off],
+                tool="llm:fits",
+                samples=[f"{_sample(refs[ref])} · {why}" for ref, why in off.items()],
+            )
+            if held:
+                await helper_service.add_usage(self.db, run_id=self.run_id, held=held)
+                await self.db.commit()
+                state.facts["held"] += held
+        return used
 
     async def _conversation_brief(self, state: StepState) -> str:
         """LLM에 보일 남은 대화들 (ref를 매긴다)."""
@@ -854,10 +941,17 @@ class Helper(Agent):
         refs = {
             "refs": {"type": "array", "items": {"type": "string"}, "description": "r1 같은 ref들"}
         }
+        # 빼기는 데이터를 바꾸는 판단이라 한 건씩 까닭과 함께 부르게 한다(여러 건을 한 까닭으로 묶어 빼던 일을 막는다).
+        one_ref = {
+            "ref": {"type": "string", "description": "r1 같은 ref 하나"},
+            "reason": {"type": "string", "description": "이 대화를 빼는 까닭 한 줄"},
+        }
 
         def handler(action: Action | None) -> agent_service.ToolHandler:
             async def handle(arguments: dict[str, Any], _tokens: int) -> dict[str, Any]:
-                ids = [state.refs[ref] for ref in arguments.get("refs", []) if ref in state.refs]
+                # drop은 한 번에 하나(ref)라 refs가 없으면 ref를 쓴다.
+                asked = arguments.get("refs") or [arguments.get("ref")]
+                ids = [state.refs[ref] for ref in asked if ref in state.refs]
                 if action is None:
                     await helper_service.add_usage(self.db, run_id=self.run_id, held=len(ids))
                     await self.db.commit()
@@ -900,7 +994,12 @@ class Helper(Agent):
                 handler(Action.KEEP),
             ),
             "drop": (
-                agent_tool("drop", f"{what} 학습에서 뺀다(되돌릴 수 있다).", refs, ["refs"]),
+                agent_tool(
+                    "drop",
+                    f"{what} 학습에서 뺀다(되돌릴 수 있다). 한 번에 하나만, 왜 빼는지 그 대화에 맞는 까닭과 함께.",
+                    one_ref,
+                    ["ref", "reason"],
+                ),
                 handler(Action.DROP),
             ),
             "hold": (
@@ -1320,13 +1419,25 @@ class Helper(Agent):
             },
         )
 
-    async def _record(self, check: CheckKey, action: Action, ids: list[int], *, tool: str) -> int:
-        """빼기 · 그대로 두기 · 가리기 · 자르기를 반영하고 바꾼 카드 하나를 적는다. 바꾼 수. 커밋한다."""
+    async def _record(
+        self,
+        check: CheckKey,
+        action: Action,
+        ids: list[int],
+        *,
+        tool: str,
+        samples: list[str] | None = None,
+    ) -> int:
+        """빼기 · 그대로 두기 · 가리기 · 자르기를 반영하고 바꾼 카드 하나를 적는다(보기는 samples, 없으면 지시 앞부분).
+        바꾼 수. 커밋한다."""
         if not ids:
             return 0
         items = await conversations.items_of(self.db, dataset_id=self.dataset_id, ids=ids)
         event = await self._change_event(
-            action, len(ids), tool=tool, samples=[_sample(item) for item in items]
+            action,
+            len(ids),
+            tool=tool,
+            samples=samples if samples is not None else [_sample(item) for item in items],
         )
         if action in (Action.DROP, Action.KEEP):
             await conversations.apply_bulk(
@@ -1535,6 +1646,32 @@ def _last_user(messages: list[dict[str, Any]]) -> str:
 def _sample(item: conversations.ConversationItem) -> str:
     """바꾼 카드의 보기: 마지막 사용자 말 앞부분."""
     return _last_user(item.prompt.messages)[:SAMPLE_LENGTH] or "(빈 지시)"
+
+
+def _verdict_line(ref: str, item: conversations.ConversationItem) -> str:
+    """판정에 보일 대화 한 건: 최근 턴들(역할: 글)과 마지막 응답. Jev 점수는 보이지 않는다."""
+    turns = [m for m in item.prompt.messages if m["role"] in VERDICT_ROLES][-VERDICT_TURNS:]
+    body = "\n".join(
+        f"   {VERDICT_ROLES[m['role']]}: {m['content'][:VERDICT_TURN_CHARS]}" for m in turns
+    )
+    answer = item.answer.content if item.answer else ""
+    return f"{ref}\n{body}\n   마지막 응답: {answer[:VERDICT_ANSWER_CHARS]}"
+
+
+def _read_verdicts(reply: str) -> dict[str, tuple[str, str]]:
+    """LLM 판정 답(JSON 목록)을 {ref: (fits, why)}로. 읽을 수 없으면 빈 사전(모두 사람에게)."""
+    start, end = reply.find("["), reply.rfind("]")
+    if start < 0 or end <= start:
+        return {}
+    try:
+        rows = json.loads(reply[start : end + 1])
+    except json.JSONDecodeError:
+        return {}
+    verdicts: dict[str, tuple[str, str]] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and isinstance(row.get("ref"), str):
+            verdicts[row["ref"]] = (str(row.get("fits", "")).lower(), str(row.get("why", "")))
+    return verdicts
 
 
 def _conversation_line(ref: str, item: conversations.ConversationItem, *, suspect: bool) -> str:
