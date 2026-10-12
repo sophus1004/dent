@@ -1,7 +1,8 @@
 <!--
   데이터셋 화면의 틀 (#/generation/<id>/…, 분류 · 검색과 같은 짜임):
     상단 바   생성 › 데이터셋 이름 › 지금 탭 · [도우미 ⌘J] · [+ 데이터 추가](#/generation/<id>/add) · [내보내기]
-    머리      이름 / 입구 n단계 / 대화 n / 문제 n / 수정 시각 · [⋯] → [데이터셋 지우기]
+    머리      이름 · 선호 · 평가셋 태그 / 입구 n단계 / 대화 n / 문제 n / 수정 시각
+              · [⋯] → [평가셋으로 표시 | 평가셋 표시 해제] · [데이터셋 지우기]
               머리 칸이 51.25rem보다 좁으면 수는 이름 아래 줄로 내리고 [⋯]는 이름 줄 끝에 둔다(@container).
     탭        진단(검토 포함, 문제가 남은 대화 수 보라 알약) · 데이터(대화 수) · 휴지통 · 가져온 기록
     본문      지금 탭(RouterView). 데이터셋을 읽은 뒤에 그리고, 읽은 데이터셋을 dataset으로 넘긴다.
@@ -9,7 +10,19 @@
   오른쪽 끝의 빈 자리(#dataset-side)는 데이터 탭이 대화 패널을 그리는 곳이다. 그 오른쪽에 도우미 창(HelperPanel)이 붙는다.
 -->
 <script setup lang="ts">
-import { Database, Download, Ellipsis, House, MessageSquareText, Plus, SearchX, Sparkles, Trash2, TriangleAlert } from '@lucide/vue'
+import {
+  Database,
+  Download,
+  Ellipsis,
+  FlaskConical,
+  House,
+  MessageSquareText,
+  Plus,
+  SearchX,
+  Sparkles,
+  Trash2,
+  TriangleAlert,
+} from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
@@ -23,12 +36,14 @@ import { Button } from '@/system/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/system/ui/dropdown-menu'
 import { Skeleton } from '@/system/ui/skeleton'
 
-import { getDataset } from '@/modules/generation/api'
+import { pushToast } from '@/system/toasts'
+
+import { getDataset, updateSettings } from '@/modules/generation/api'
 import DatasetDeleteDialog from '@/modules/generation/DatasetDeleteDialog.vue'
 import { provideDatasetRefresh } from '@/modules/generation/datasetRefresh'
 import { loadDatasets } from '@/modules/generation/datasets'
 import ExportDialog from '@/modules/generation/ExportDialog.vue'
-import { GENERATION_PLAN_STEPS, generationHelperApi } from '@/modules/generation/helperApi'
+import { generationHelperApi, generationPlanSteps } from '@/modules/generation/helperApi'
 import { jobFinished } from '@/modules/generation/jobEvents'
 import StageNo from '@/modules/generation/StageNo.vue'
 import type { DatasetRead } from '@/modules/generation/types'
@@ -134,6 +149,20 @@ async function refreshDataset(): Promise<void> {
 
 provideDatasetRefresh(refreshDataset)
 
+const planSteps = computed(() => generationPlanSteps(dataset.value?.settings.goal === 'preference'))
+
+/** [⋯] → 평가셋으로 표시 · 해제. 다른 데이터셋의 오염 대조가 다시 들어간다. */
+async function toggleEval(): Promise<void> {
+  if (!dataset.value) return
+  const next = !dataset.value.settings.is_eval
+  try {
+    await updateSettings(datasetId.value, { is_eval: next })
+    await refreshDataset()
+  } catch (error) {
+    pushToast({ tone: 'fail', title: '평가셋 표시', detail: errorMessage(error), actions: [] })
+  }
+}
+
 function onDeleted(): void {
   void loadDatasets()
   void router.push('/')
@@ -198,6 +227,20 @@ function onDeleted(): void {
               <span v-if="dataset.importing" class="rounded-md bg-muted px-1.5 text-meta font-semibold text-muted-foreground">
                 가져오는 중
               </span>
+              <span
+                v-if="dataset.settings.goal === 'preference'"
+                class="rounded-md bg-accent px-1.5 text-meta font-semibold text-accent-foreground"
+                data-goal-tag
+              >
+                선호
+              </span>
+              <span
+                v-if="dataset.settings.is_eval"
+                class="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 text-meta font-semibold text-foreground"
+                data-eval-tag
+              >
+                <FlaskConical class="size-3" />평가셋
+              </span>
               <div
                 class="order-2 flex flex-wrap items-center gap-x-2 text-ui text-muted-foreground @max-[51.25rem]:order-4 @max-[51.25rem]:basis-full @max-[51.25rem]:pl-11 @max-[51.25rem]:[&>span:first-child]:hidden"
               >
@@ -217,6 +260,9 @@ function onDeleted(): void {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" class="min-w-44">
+                  <DropdownMenuItem data-action="toggle-eval" @select="toggleEval">
+                    <FlaskConical />{{ dataset.settings.is_eval ? '평가셋 표시 해제' : '평가셋으로 표시' }}
+                  </DropdownMenuItem>
                   <DropdownMenuItem class="text-danger-ink" data-action="open-dataset-delete" @select="deleteOpen = true">
                     <Trash2 />데이터셋 지우기
                   </DropdownMenuItem>
@@ -265,7 +311,7 @@ function onDeleted(): void {
         v-if="isHelperOpen && dataset"
         :dataset-id="datasetId"
         :api="generationHelperApi"
-        :plan-steps="GENERATION_PLAN_STEPS"
+        :plan-steps="planSteps"
         @close="setHelperOpen(false)"
       />
     </Transition>

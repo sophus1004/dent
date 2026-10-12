@@ -1,0 +1,23 @@
+{
+  "key": "pref",
+  "rows": 68,
+  "planted": [
+    {
+      "name": "같은 쌍 · 동점",
+      "count": 4,
+      "unit": "쌍"
+    },
+    {
+      "name": "판정 반대",
+      "count": 3,
+      "unit": "쌍"
+    }
+  ],
+  "checks": {
+    "length_bias": 45,
+    "same_pair": 4
+  },
+  "semantic": {
+    "judge_reversed": 3
+  }
+}

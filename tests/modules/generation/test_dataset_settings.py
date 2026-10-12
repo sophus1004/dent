@@ -16,12 +16,12 @@ SHARED = "다음 글을 읽고 글쓴이가 가장 강조하는 주장과 그 �
 
 
 def _hub() -> httpx.MockTransport:
-    """가짜 허깅페이스: acme/tiny의 tokenizer.json (글자 하나가 토큰 하나)."""
+    """가짜 허깅페이스: acme/chars의 tokenizer.json (글자 하나가 토큰 하나)."""
     tokenizer = Tokenizer(models.WordLevel(vocab={"[UNK]": 0}, unk_token="[UNK]"))
     tokenizer.pre_tokenizer = pre_tokenizers.Split("", behavior="isolated")
 
     def reply(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/acme/tiny/resolve/main/tokenizer.json":
+        if request.url.path == "/acme/chars/resolve/main/tokenizer.json":
             return httpx.Response(200, content=tokenizer.to_str().encode("utf-8"))
         return httpx.Response(404)
 
@@ -101,7 +101,7 @@ async def test_tokenizer_model_remeasures_long_conversations_by_tokens(client, d
     # 실행: 학습할 모델 · 최대 길이를 정하면 길이 작업이 들어가 토크나이저로 다시 잰다
     saved = await client.patch(
         f"{API}/datasets/{dataset_id}/settings",
-        json={"tokenizer_model": "acme/tiny", "max_tokens": 256},
+        json={"tokenizer_model": "acme/chars", "max_tokens": 256},
     )
     [job] = await _queued(db_session, "length")
     await run_length_job(job, transport=_hub())
@@ -109,11 +109,11 @@ async def test_tokenizer_model_remeasures_long_conversations_by_tokens(client, d
     dataset = (await client.get(f"{API}/datasets/{dataset_id}")).json()
 
     # 확인: 토큰으로 재면 최대 길이(256)를 넘어 긴 대화
-    assert saved.json()["tokenizer_model"] == "acme/tiny"
+    assert saved.json()["tokenizer_model"] == "acme/chars"
     assert (_check(before, "long") or {}).get("count", 0) == 0
     assert after["length_by"] == "tokens"
     assert _check(after, "long")["count"] == 1
-    assert dataset["settings"]["measured_model"] == "acme/tiny"
+    assert dataset["settings"]["measured_model"] == "acme/chars"
 
 
 async def test_settings_rejects_bad_model_name(client, db_session):

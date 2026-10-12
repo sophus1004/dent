@@ -4,6 +4,8 @@
     글        학습에 들어가는 글 그대로(코드 울타리 ```도 그대로, 울타리 안은 고정폭 글꼴). 문제 자리(서버의 start · end)를 칠한다: 심각 빨강 · 주의 호박.
               보고 있는 검사(focus)의 자리는 더 진하게. 글이 길면 앞부분과 문제 둘레만 보이고 [전체 보기]로 편다.
     칩        그 메시지의 문제 이름(진단 검사 이름과 같다). 대화 전체에 걸친 문제(구조 · 같은 지시)는 맨 위 한 줄.
+    도구      응답이 부른 도구는 글 아래 '→ 이름(인자)' 고정폭 줄, 도구 결과는 '도구 결과 · 호출 번호'.
+    응답 없음 지시만인 대화는 끝에 점선 줄 '응답 없음'. contextOnly면(선호 쌍 보기) 주 응답을 빼고 맥락만 그린다.
   글을 HTML로 그리지 않는다. 칠한 자리는 글 조각으로 나눠 그린다.
 -->
 <script setup lang="ts">
@@ -13,7 +15,7 @@ import { GRADES } from '@/system/diagnosis/grades'
 import { fmt } from '@/system/format'
 
 import { checkWords } from '@/modules/generation/checks'
-import type { CheckKey, ConversationRead, Grade, ProblemRead } from '@/modules/generation/types'
+import type { CheckKey, ConversationRead, Grade, MessageRead, ProblemRead, ToolCall } from '@/modules/generation/types'
 
 const props = defineProps<{
   conversation: ConversationRead
@@ -21,6 +23,8 @@ const props = defineProps<{
   grades: Partial<Record<CheckKey, Grade>>
   // 보고 있는 검사 (그 자리를 더 진하게)
   focus?: CheckKey | null
+  // 맥락만 (주 응답을 빼고 그린다: 선호 쌍 보기)
+  contextOnly?: boolean
 }>()
 
 // 이보다 긴 글은 접는다(글자 수)
@@ -29,7 +33,10 @@ const FOLD_LENGTH = 1_400
 const FOLD_HEAD = 500
 const FOLD_AROUND = 320
 
-const ROLE_WORDS = { system: '시스템', user: '사용자', assistant: '응답' } as const
+const ROLE_WORDS = { system: '시스템', user: '사용자', assistant: '응답', tool: '도구 결과' } as const
+
+// 도구 호출 인자를 한 줄로 보일 때의 최대 글자 수
+const CALL_ARGS_LENGTH = 160
 
 // 편 메시지 순서들
 const expanded = ref(new Set<number>())
@@ -56,18 +63,35 @@ const CODE_CLASS = 'font-mono text-[12.5px]'
 
 interface TurnView {
   index: number
-  role: 'system' | 'user' | 'assistant'
+  role: MessageRead['role']
   // 역할마다 몇 번째
   order: number
   segments: Segment[]
   problems: ProblemRead[]
   folded: boolean
   length: number
+  // 응답이 부른 도구 (이름(인자) 한 줄씩) · 도구 결과가 답하는 호출 번호
+  calls: string[]
+  callId: string | null
+}
+
+// 그릴 메시지: 맥락만이면 주 응답(마지막 메시지)을 뺀다
+const shown = computed(() => {
+  const messages = props.conversation.messages
+  return props.contextOnly && props.conversation.has_answer ? messages.slice(0, -1) : messages
+})
+
+/** 도구 호출 한 줄: 이름(인자). 인자는 JSON 글이면 그대로, 아니면 JSON으로. */
+function callText(call: ToolCall): string {
+  const body = call.function ?? call
+  const args = typeof body.arguments === 'string' ? body.arguments : JSON.stringify(body.arguments ?? {})
+  const short = args.length > CALL_ARGS_LENGTH ? `${args.slice(0, CALL_ARGS_LENGTH)}…` : args
+  return `${body.name ?? '?'}(${short})`
 }
 
 const turns = computed<TurnView[]>(() => {
-  const counts = { system: 0, user: 0, assistant: 0 }
-  return props.conversation.messages.map((message, index) => {
+  const counts = { system: 0, user: 0, assistant: 0, tool: 0 }
+  return shown.value.map((message, index) => {
     counts[message.role] += 1
     const problems = props.conversation.problems.filter((problem) => problem.turn === index)
     const isLong = message.content.length > FOLD_LENGTH
@@ -82,9 +106,14 @@ const turns = computed<TurnView[]>(() => {
       problems,
       folded,
       length: message.content.length,
+      calls: (message.tool_calls ?? []).map(callText),
+      callId: message.tool_call_id,
     }
   })
 })
+
+// 지시만인 대화: 끝에 '응답 없음' 줄 (맥락만 보일 때는 그리지 않는다)
+const missingAnswer = computed(() => !props.conversation.has_answer && !props.contextOnly)
 
 /** 코드 울타리(```) 안의 자리들 [시작, 끝). 닫는 울타리가 없으면 글 끝까지. */
 function codeRanges(content: string): [number, number][] {
@@ -194,10 +223,11 @@ function turnTone(turn: TurnView): string {
     >
       <div
         class="flex flex-col items-start gap-0.5 pl-1 text-meta font-[650]"
-        :class="turn.role === 'assistant' ? 'text-accent-foreground' : turn.role === 'system' ? 'text-subtle-foreground' : 'text-muted-foreground'"
+        :class="turn.role === 'assistant' ? 'text-accent-foreground' : turn.role === 'system' || turn.role === 'tool' ? 'text-subtle-foreground' : 'text-muted-foreground'"
       >
         {{ ROLE_WORDS[turn.role] }}
-        <span v-if="turn.role !== 'system'" class="text-[11px] font-medium text-subtle-foreground">{{ turn.order }}번째</span>
+        <span v-if="turn.role === 'tool' && turn.callId" class="font-mono text-[11px] font-medium text-subtle-foreground">{{ turn.callId }}</span>
+        <span v-else-if="turn.role !== 'system'" class="text-[11px] font-medium text-subtle-foreground">{{ turn.order }}번째</span>
       </div>
       <div class="min-w-0">
         <div
@@ -212,7 +242,16 @@ function turnTone(turn: TurnView): string {
             <span v-else-if="segment.code" :class="CODE_CLASS">{{ segment.text }}</span>
             <template v-else>{{ segment.text }}</template>
           </template>
-          <span v-if="!turn.length" class="text-subtle-foreground">(비어 있음)</span>
+          <span v-if="!turn.length && !turn.calls.length" class="text-subtle-foreground">(비어 있음)</span>
+        </div>
+        <div v-if="turn.calls.length" class="mt-1 grid gap-1" data-tool-calls>
+          <div
+            v-for="(call, callIndex) in turn.calls"
+            :key="callIndex"
+            class="w-fit max-w-full truncate rounded-md bg-muted px-1.5 py-0.5 font-mono text-[12px] text-foreground"
+          >
+            → {{ call }}
+          </div>
         </div>
         <div v-if="turn.problems.length || turn.length > FOLD_LENGTH" class="mt-1.5 flex flex-wrap items-center gap-1.5">
           <span
@@ -233,6 +272,15 @@ function turnTone(turn: TurnView): string {
           </button>
         </div>
       </div>
+    </div>
+
+    <div
+      v-if="missingAnswer"
+      class="grid grid-cols-[72px_minmax(0,1fr)] gap-2.5 border-t border-dashed py-2.5"
+      data-missing-answer
+    >
+      <div class="pl-1 text-meta font-[650] text-subtle-foreground">응답</div>
+      <div class="text-[13.5px] text-subtle-foreground">응답 없음 · 응답 만들기</div>
     </div>
   </div>
 </template>

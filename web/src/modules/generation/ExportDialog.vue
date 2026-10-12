@@ -1,9 +1,11 @@
 <!--
   생성 내보내기 창. 상단 바 [내보내기]로 연다(분류 · 검색 내보내기 창과 같은 틀).
-    파일 모양    학습 · jsonl(messages · source, TRL SFTTrainer · 허깅페이스 datasets). 첫 판은 이것 하나다.
-                 나누지 않는다: 휴지통 밖 대화를 모두 넣는다.
+    파일 모양    SFT · jsonl(messages · tools · source, TRL SFTTrainer) · 선호 · jsonl(prompt · chosen · rejected,
+                 TRL DPOTrainer) · 지시만 · jsonl(prompt, GRPO 같은 온라인 학습). 처음엔 만들 데이터에 맞춰 SFT 또는 선호를 고른다.
+                 나누지 않는다: 휴지통 밖을 모두 넣는다(SFT는 응답이 있는 대화, 선호는 뺀 쌍 빼고).
     넣지 않음    휴지통
-    미리 보기    고른 대로 만든 첫 줄 · 파일마다 대화 수 · 잠김(남은 심각, [파일 만들기]가 꺼진다) · 남은 주의(그대로 넣음)
+    미리 보기    처음 고른 모양의 첫 줄 · 파일마다 줄 수(대화 · 쌍) · 잠김(그 파일을 막는 심각, [파일 만들기]가 꺼진다.
+                 지시만 파일은 지시 단계의 심각만 막는다) · 남은 주의(그대로 넣음)
   [파일 만들기] → 고른 모양마다 작업("generation", "export") 하나. 만드는 동안 이 창에서 파일마다 대기 · 단계를 보고
   (system/exports/ExportFiles), 끝나면 [내려받기](7일 보관).
 -->
@@ -29,13 +31,18 @@ const props = defineProps<{
 const open = defineModel<boolean>('open', { required: true })
 
 const FORMATS: { key: ExportFormat; name: string; columns: string[]; note: string }[] = [
-  { key: 'sft_jsonl', name: '학습 · jsonl', columns: ['messages', 'source'], note: 'TRL SFTTrainer · datasets' },
+  { key: 'sft_jsonl', name: 'SFT · jsonl', columns: ['messages', 'tools', 'source'], note: 'TRL SFTTrainer · datasets' },
+  { key: 'dpo_jsonl', name: '선호 · jsonl', columns: ['prompt', 'chosen', 'rejected'], note: 'TRL DPOTrainer' },
+  { key: 'prompts_jsonl', name: '지시만 · jsonl', columns: ['prompt', 'source'], note: 'GRPO · 온라인 학습' },
 ]
+
+// 줄의 단위 낱말
+const UNIT_WORDS = { conversation: '대화', pair: '쌍' } as const
 
 // 미리 보기를 다시 묻기까지 기다리는 시간(밀리초). 여러 칸을 잇달아 누르는 동안 여러 번 묻지 않게.
 const PREVIEW_DELAY_MS = 300
 
-const choice = reactive<ExportCreate>({ formats: ['sft_jsonl'] })
+const choice = reactive<ExportCreate>({ formats: [] })
 const preview = ref<ExportPreviewRead | null>(null)
 const previewError = ref<string | null>(null)
 const creating = ref(false)
@@ -46,20 +53,23 @@ let previewTimer: ReturnType<typeof setTimeout> | undefined
 
 const blocked = computed(() => preview.value?.checks.filter((check) => check.grade === 'bad') ?? [])
 const warnings = computed(() => preview.value?.checks.filter((check) => check.grade === 'warn') ?? [])
-const conversations = computed(() => preview.value?.files[0]?.conversations ?? 0)
+// 고른 파일마다 넣을 줄이 있는지 (없으면 서버가 422)
+const hasRows = computed(() => (preview.value?.files ?? []).every((file) => file.conversations > 0))
 const canCreate = computed(
   () =>
     choice.formats.length > 0 &&
     !creating.value &&
     preview.value !== null &&
     !preview.value.blocked &&
-    conversations.value > 0,
+    hasRows.value,
 )
 
 watch(open, (isOpen) => {
   if (!isOpen) return
   made.value = []
   createError.value = null
+  // 처음엔 만들 데이터에 맞춘 모양 하나 (선호 → DPO, 아니면 SFT)
+  if (!choice.formats.length) choice.formats.push(props.dataset.settings.goal === 'preference' ? 'dpo_jsonl' : 'sft_jsonl')
   schedulePreview()
 })
 watch(choice, schedulePreview, { deep: true })
@@ -114,7 +124,7 @@ const COLUMN_CHIP = 'rounded-[5px] bg-muted px-1.5 font-mono text-[11px] text-mu
         <Download class="size-4 text-muted-foreground" />
         <DialogTitle class="text-title font-semibold">내보내기</DialogTitle>
         <span class="truncate text-ui text-muted-foreground">{{ dataset.name }}</span>
-        <DialogDescription class="sr-only">SFT 학습 파일 만들기</DialogDescription>
+        <DialogDescription class="sr-only">SFT · 선호 · 지시만 학습 파일 만들기</DialogDescription>
       </DialogHeader>
 
       <template v-if="!made.length">
@@ -166,9 +176,19 @@ const COLUMN_CHIP = 'rounded-[5px] bg-muted px-1.5 font-mono text-[11px] text-mu
         <div :class="ROW">
           <span :class="LABEL">파일</span>
           <div class="grid gap-2 sm:grid-cols-2">
-            <div v-for="file in preview?.files ?? []" :key="file.file_name" class="grid gap-0.5 rounded-[10px] border px-3 py-2">
+            <div
+              v-for="file in preview?.files ?? []"
+              :key="file.file_name"
+              class="grid gap-0.5 rounded-[10px] border px-3 py-2"
+              :class="file.blocked || !file.conversations ? 'border-dashed' : ''"
+              :data-export-file="file.format"
+            >
               <b class="truncate text-ui font-semibold">{{ file.file_name }}</b>
-              <span class="text-meta text-muted-foreground">대화 {{ fmt(file.conversations) }}</span>
+              <span class="text-meta text-muted-foreground">
+                {{ UNIT_WORDS[file.unit] }} {{ fmt(file.conversations) }}
+                <span v-if="file.blocked" class="font-semibold text-danger-ink"> · 잠김</span>
+                <span v-else-if="!file.conversations" class="font-semibold text-warning-ink"> · 넣을 것 없음</span>
+              </span>
             </div>
             <span v-if="!preview" class="pt-1 text-ui text-subtle-foreground">—</span>
           </div>

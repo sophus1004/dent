@@ -1,7 +1,8 @@
-"""생성 내장 예시 데이터 테스트: 둘을 넣어(보통 가져오기 길) 심은 문제가 정답지의 수만큼 진단에 보이는지 본다."""
+"""생성 내장 예시 데이터 테스트: 넣어서(보통 가져오기 길) 심은 문제가 정답지의 수만큼 진단에 보이는지 본다."""
 
 import json
 
+import pytest
 from fastapi import status
 
 from dent.modules.generation import examples as examples_service
@@ -35,13 +36,13 @@ async def _rule_counts(db_session, dataset_id: int) -> tuple[int, dict[str, int]
     return overview.conversations, counts
 
 
-async def test_list_examples_shows_two_entries_with_planted_problems(client):
+async def test_list_examples_shows_entries_with_planted_problems(client):
     # 실행
     response = await client.get(f"{API}/examples")
 
     # 확인
     items = response.json()
-    assert [item["key"] for item in items] == ["sft", "chat"]
+    assert [item["key"] for item in items] == ["sft", "chat", "prompts", "tools", "pref"]
     assert items[0]["planted"]
     assert items[1]["planted"] == []
     assert all(item["dataset_id"] is None for item in items)
@@ -59,6 +60,22 @@ async def test_install_sft_shows_planted_rule_problems(client, db_session):
     assert conversations == answers["rows"]
     expected = {key: answers["checks"].get(key, 0) for key in counts}
     assert counts == expected
+
+
+@pytest.mark.parametrize("key", ["prompts", "tools", "pref"])
+async def test_install_new_shapes_show_planted_rule_problems(client, db_session, key):
+    # 준비
+    answers = _answers(key)
+
+    # 실행
+    dataset_id = await _install(client, db_session, key)
+
+    # 확인: 지시만 · 도구 호출 · 선호 쌍도 정답지의 수만큼 (선호 쌍은 쌍 수가 줄 수)
+    overview = await overview_service.get_overview(db_session, dataset_id=dataset_id)
+    _conversations, counts = await _rule_counts(db_session, dataset_id)
+    rows = overview.pairs if key == "pref" else overview.conversations
+    assert rows == answers["rows"]
+    assert counts == {name: answers["checks"].get(name, 0) for name in counts}
 
 
 async def test_install_chat_shows_no_problems(client, db_session):
@@ -86,4 +103,7 @@ async def test_install_example_returns_409_when_installed_and_404_when_unknown(c
     assert {item["key"]: item["dataset_id"] is not None for item in listed} == {
         "sft": False,
         "chat": True,
+        "prompts": False,
+        "tools": False,
+        "pref": False,
     }

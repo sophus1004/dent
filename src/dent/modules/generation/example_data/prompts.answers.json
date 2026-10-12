@@ -1,0 +1,27 @@
+{
+  "key": "prompts",
+  "rows": 26,
+  "planted": [
+    {
+      "name": "응답 없음",
+      "count": 26,
+      "unit": "건"
+    },
+    {
+      "name": "같은 지시",
+      "count": 2,
+      "unit": "건"
+    },
+    {
+      "name": "개인정보",
+      "count": 1,
+      "unit": "건"
+    }
+  ],
+  "checks": {
+    "duplicate": 2,
+    "no_answer": 26,
+    "pii": 1
+  },
+  "semantic": {}
+}

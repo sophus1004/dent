@@ -77,7 +77,11 @@ function firstUser(conversation: ConversationRead): string {
 }
 
 function lastAnswer(conversation: ConversationRead): string {
-  return conversation.messages.at(-1)?.content ?? ''
+  // 지시만이면 응답이 없다(마지막 메시지는 사용자 말이다).
+  if (!conversation.has_answer) return ''
+  const last = conversation.messages.at(-1)
+  const calls = last?.tool_calls?.map((call) => (call.function ?? call).name ?? '?') ?? []
+  return last?.content || (calls.length ? `→ ${calls.join(' · ')}` : '')
 }
 
 function turnCount(conversation: ConversationRead): number {
@@ -191,7 +195,7 @@ function rowClass(conversation: ConversationRead): string {
           </div>
         </td>
         <td v-if="isWide" :class="TD_CLASS">
-          <div class="line-clamp-2 break-all text-muted-foreground">{{ lastAnswer(conversation) || '(빈 응답)' }}</div>
+          <div class="line-clamp-2 break-all text-muted-foreground">{{ lastAnswer(conversation) || (conversation.has_answer ? '(빈 응답)' : '(응답 없음)') }}</div>
         </td>
         <td :class="[TD_CLASS, 'text-right tabular-nums']">{{ turnCount(conversation) }}</td>
         <td :class="TD_CLASS"><ProblemMarks :conversation="conversation" :grades="grades" /></td>

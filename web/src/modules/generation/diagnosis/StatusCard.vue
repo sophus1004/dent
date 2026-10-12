@@ -54,9 +54,17 @@ const firstProblem = computed(() => {
   return [...open].sort((a, b) => GRADES[a.grade].rank - GRADES[b.grade].rank)[0] ?? null
 })
 
-// 다음 할 일: 지금 단계의 남은 검사 이름(둘까지). 남은 것이 없으면 내보내기
+// 3 선호가 있는지 (만들 데이터가 선호이거나 쌍이 있다)
+const withPairs = computed(() => props.overview.goal === 'preference' || props.overview.pairs > 0)
+
+// 다음 할 일: 지금 단계의 남은 검사 이름(둘까지). 응답 · 비교 만들기가 남았으면 그것, 남은 것이 없으면 내보내기
 const nextTodo = computed(() => {
-  if (props.overview.now_stage >= 3) return '내보내기'
+  const { now_stage: now, unanswered, unpaired } = props.overview
+  if (now <= 2 && unanswered) return `응답 만들기 · 지시 ${fmt(unanswered)}`
+  if (now === 3 && withPairs.value && unpaired && !props.overview.checks.some((c) => c.stage === 3 && c.grade !== 'good')) {
+    return `비교 만들기 · 지시 ${fmt(unpaired)}`
+  }
+  if (now >= 4) return '내보내기'
   const names = props.overview.checks
     .filter((check) => check.stage === props.overview.now_stage && check.grade !== 'good')
     .map((check) => checkWords(check.key).name)
@@ -125,7 +133,15 @@ const nextTodo = computed(() => {
       </div>
     </div>
 
-    <FlowLine :now="overview.now_stage" :open-counts="openCounts" :selected="selected" @select="emit('select', $event)" />
+    <FlowLine
+      :now="overview.now_stage"
+      :open-counts="openCounts"
+      :selected="selected"
+      :with-pairs="withPairs"
+      :unanswered="overview.unanswered"
+      :unpaired="overview.unpaired"
+      @select="emit('select', $event)"
+    />
 
     <div
       class="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1.5 border-t bg-[color-mix(in_oklab,var(--muted)_45%,var(--card))] py-1.5 pr-3.5 pl-6 text-meta text-muted-foreground"

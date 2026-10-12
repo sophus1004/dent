@@ -30,7 +30,10 @@ import type {
   MapTextRead,
   NearPartnerRead,
   OverviewRead,
+  PairDecisionCreate,
   ReviewQueueRead,
+  SettingsRead,
+  SettingsUpdate,
 } from '@/modules/generation/types'
 
 const BASE = '/api/v1/generation'
@@ -45,6 +48,16 @@ export function listDatasets(signal?: AbortSignal): Promise<DatasetSummaryRead[]
 /** 데이터셋 하나. 없으면 404. */
 export function getDataset(datasetId: number, signal?: AbortSignal): Promise<DatasetRead> {
   return request('GET', `${BASE}/datasets/${datasetId}`, { signal })
+}
+
+/** 데이터셋 설정 고치기(만들 데이터 · 평가셋 · 학습할 모델 · 최대 길이). 모델 · 길이를 바꾸면 길이를 다시 잰다. */
+export function updateSettings(datasetId: number, data: SettingsUpdate): Promise<SettingsRead> {
+  return request('PATCH', `${BASE}/datasets/${datasetId}/settings`, { body: data })
+}
+
+/** 평가셋과 다시 대조하기. 평가셋이 없으면 아무 일도 하지 않는다. */
+export function checkContamination(datasetId: number): Promise<void> {
+  return request('POST', `${BASE}/datasets/${datasetId}/contamination`)
 }
 
 /** 데이터셋을 대화 · 결정 기록 · 가져오기 기록까지 지운다. 가져오는 중이면 409. */
@@ -97,14 +110,39 @@ export function getConversation(conversationId: number, signal?: AbortSignal): P
   return request('GET', `${BASE}/conversations/${conversationId}`, { signal })
 }
 
-/** 검토 큐: 한 검사의 문제가 남은 대화 번호들. */
-export function getReviewQueue(datasetId: number, check: CheckKey, signal?: AbortSignal): Promise<ReviewQueueRead> {
-  return request('GET', `${BASE}/datasets/${datasetId}/review`, { query: { check }, signal })
+/** 선호 쌍 하나가 든 대화 (그 지시의 응답 · 쌍 전부). */
+export function getPairConversation(pairId: number, signal?: AbortSignal): Promise<ConversationRead> {
+  return request('GET', `${BASE}/pairs/${pairId}`, { signal })
 }
 
-/** 검토 결정 하나(빼기 · 그대로 두기 · 가리기 · 자르기). */
+/** 검토 큐: 한 검사의 문제가 남은 번호들(쌍 검사면 쌍 번호). kept면 그대로 둔 것들. */
+export function getReviewQueue(
+  datasetId: number,
+  check: CheckKey,
+  signal?: AbortSignal,
+  kept = false,
+): Promise<ReviewQueueRead> {
+  return request('GET', `${BASE}/datasets/${datasetId}/review`, { query: { check, kept }, signal })
+}
+
+/** 검토 결정 하나(빼기 · 그대로 두기 · 가리기 · 자르기 · 다시 쓰기 · 응답 만들기). */
 export function decide(conversationId: number, data: DecisionCreate): Promise<DecisionRead> {
   return request('POST', `${BASE}/conversations/${conversationId}/decide`, { body: data })
+}
+
+/** 선호 쌍 결정 하나(쌍 빼기 · 뒤집기 · 그대로 두기). */
+export function decidePair(pairId: number, data: PairDecisionCreate): Promise<DecisionRead> {
+  return request('POST', `${BASE}/pairs/${pairId}/decide`, { body: data })
+}
+
+/** '그대로 두기'를 거둬 그 검사로 다시 묻는다. */
+export function unkeepConversation(conversationId: number, check: CheckKey): Promise<ConversationRead> {
+  return request('POST', `${BASE}/conversations/${conversationId}/unkeep`, { body: { check } })
+}
+
+/** 쌍의 '그대로 두기'를 거둬 그 검사로 다시 묻는다. */
+export function unkeepPair(pairId: number, check: CheckKey): Promise<ConversationRead> {
+  return request('POST', `${BASE}/pairs/${pairId}/unkeep`, { body: { check } })
 }
 
 /** 한 검사의 남은 대화 모두에 같은 결정. */
@@ -179,6 +217,11 @@ export function getHelper(datasetId: number, signal?: AbortSignal): Promise<Help
 /** 도우미 시작. 뜻 분석이 없거나 오래됐으면 먼저 다시 만든다. LLM이 없으면 422, 이미 도는 중이면 409. */
 export function startHelper(datasetId: number): Promise<HelperRunRead> {
   return request('POST', `${BASE}/datasets/${datasetId}/helper`)
+}
+
+/** 허락에 답한다 (응답 만들기 · 비교 만들기). 기다리는 중이 아니면 409. */
+export function answerHelperPermission(runId: number, approve: boolean): Promise<HelperRunRead> {
+  return request('POST', `${BASE}/helper/${runId}/permission`, { body: { approve } })
 }
 
 /** 도우미가 끝난 뒤 남은 것 (지금 진단으로 센다) */

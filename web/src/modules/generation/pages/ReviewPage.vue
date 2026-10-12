@@ -1,18 +1,21 @@
 <!--
   검토 (#/generation/<id>/review?check=<검사>): 진단의 검사 줄 [→]로 들어와 한 검사의 문제를 한 건씩 보고 결정한다.
     도구 줄   [← 진단] 검토 · 고칠 것 n건 · 끝 n(이번 검토에서 한 결정)
-    왼쪽      고칠 것: 단계(1 지시 · 2 응답)마다 문제가 남은 검사 · 남은 수(등급 색) · 끝 n. 누르면 그 검사의 큐.
-              기다림: 뜻 분석 · Jev가 있어야 재는 검사(다음 판, 흐림)
+    왼쪽      고칠 것: 단계(1 지시 · 2 응답 · 3 선호)마다 문제가 남은 검사 · 남은 수(등급 색) · 끝 n. 누르면 그 검사의 큐.
+              기다림: 뜻 분석 · Jev · 평가셋이 있어야 재는 검사(흐림, 까닭)
     가운데    대화 한 건(ConversationView, 문제 자리 칠함 · 보고 있는 검사는 진하게) · n / m · #번호 · 출처 · 응답 수 · [←] [→]
               · 진행 막대(결정한 수 / 큐). 이미 결정한 대화면 맨 위에 결정 · [되돌리기].
+              쌍 검사(3 선호)면 큐가 쌍 번호이고 가운데는 쌍 보기(PairView: 지시 아래 고른 · 버린 응답 나란히).
+              그대로 둔 것이 있으면 머리에 [그대로 둔 n]: 그 검사를 그대로 둔 것만 보고 [다시 묻기]로 거둔다(규칙 오탐 살피기).
     오른쪽    결정: 검사가 허락한 결정(서버 actions, 맨 위가 규칙이 권하는 것) + 나중에. 숫자 키 1~n.
-              결정마다 하는 쪽 태그(규칙 · 사람 · LLM). 다시 쓰기는 LLM이 연결돼 있을 때만 켜진다(응답만, 출처 합성).
+              결정마다 하는 쪽 태그(규칙 · 사람 · LLM). 다시 쓰기 · 응답 만들기는 LLM이 연결돼 있을 때만 켜진다(출처 합성,
+              응답 만들기는 응답 없는 지시만 · 도구 대화는 안 됨). 쌍 검사는 쌍 빼기 · 뒤집기 · 그대로 두기.
               뜻 분석의 Jev가 규칙의 문제(거절 · 짧은 응답)를 괜찮다고 봤으면 [그대로 두기]를 권한다(가운데에 Jev 값).
               근접 중복이면 가운데 위에 뜻이 가까운 짝(번호 · 유사도 · 지시 앞부분).
               결정 기록: 되돌리지 않은 결정 최근 것부터 · [되돌리기](Z는 맨 위 것).
               남은 n건 한 번에: 모두 빼기 · 모두 그대로 두기 · Jev 괜찮음 모두 그대로 두기(확인 창을 거친다,
               대화마다 결정 기록이 남아 하나씩 되돌릴 수 있다).
-  결정은 바로 반영된다(POST /conversations/{id}/decide). 결정하면 다음 대화로 넘어가고, 진단 수 · 머리를 다시 읽는다.
+  결정은 바로 반영된다(POST /conversations/{id}/decide · 쌍은 /pairs/{id}/decide). 결정하면 다음으로 넘어가고, 진단 수 · 머리를 다시 읽는다.
   큐는 검사를 고를 때 한 번 읽는다(문제가 남은 대화 번호들). 결정한 대화도 큐에 남아 ←로 돌아가 볼 수 있다.
   키: 1~n 결정 · ← → 앞뒤 · Z 되돌리기. 입력 칸 · 확인 창에서는 받지 않는다.
   폭이 70rem보다 좁으면 세 칸을 위아래로 쌓는다(가운데 → 오른쪽 → 왼쪽, @container).
@@ -24,6 +27,7 @@ import {
   CircleCheck,
   Clock,
   LoaderCircle,
+  RotateCcw,
   SkipForward,
   TriangleAlert,
   Undo2,
@@ -44,24 +48,29 @@ import { Skeleton } from '@/system/ui/skeleton'
 import {
   decide,
   decideAll,
+  decidePair,
   getConversation,
   getOverview,
+  getPairConversation,
   getReviewQueue,
   listChanges,
   listNearPartners,
   undoChange,
+  unkeepConversation,
+  unkeepPair,
 } from '@/modules/generation/api'
 import {
   ACTION_DONE_WORDS,
   ACTION_WHO,
   ACTION_WORDS,
   CHECK_WORDS,
-  PENDING_BY_STAGE,
+  PAIR_ACTION_WORDS,
   SOURCE_WORDS,
   checkWords,
 } from '@/modules/generation/checks'
 import ConversationView from '@/modules/generation/ConversationView.vue'
 import { useDatasetRefresh } from '@/modules/generation/datasetRefresh'
+import PairView from '@/modules/generation/PairView.vue'
 import type {
   Action,
   ChangeRead,
@@ -80,13 +89,10 @@ const props = defineProps<{
 }>()
 
 // 왼쪽 목록의 단계 이름
-const STAGE_NAMES: Record<number, string> = { 1: '1 지시', 2: '2 응답' }
+const STAGE_NAMES: Record<number, string> = { 1: '1 지시', 2: '2 응답', 3: '3 선호' }
 
-// 늘 흐린 줄인 검사(서버가 아직 재지 않는 것)의 까닭
-const ALWAYS_PENDING_REASON = '다음 판'
-
-// Jev 값을 보이는 검사 (규칙이 잡았지만 Jev가 한 번 더 본 것) · 짝을 보이는 검사
-const JEV_CHECKS: CheckKey[] = ['refusal', 'short', 'mismatch']
+// Jev 값을 보이는 검사 (규칙이 잡았지만 Jev가 한 번 더 본 것 · Jev가 판정한 것)
+const JEV_CHECKS: CheckKey[] = ['refusal', 'short', 'mismatch', 'unsafe']
 
 // 결정 기록에 보일 최대 줄 수 (서버도 최근 30개만 준다)
 const CHANGE_LOG_MAX = 30
@@ -128,24 +134,28 @@ const checkKey = computed<CheckKey | null>(() => {
   return typeof asked === 'string' && asked in CHECK_WORDS ? (asked as CheckKey) : null
 })
 const check = computed<CheckRead | null>(() => overview.value?.checks.find((item) => item.key === checkKey.value) ?? null)
+// 쌍 검사면 큐가 쌍 번호다
+const isPairCheck = computed(() => check.value?.unit === 'pair')
+// 그대로 둔 것만 보는지 (주소 ?kept=1)
+const keptMode = computed(() => route.query.kept === '1')
 const grades = computed(() =>
   Object.fromEntries((overview.value?.checks ?? []).map((item) => [item.key, item.grade])) as Partial<Record<CheckKey, Grade>>,
 )
 
 // 왼쪽 목록: 문제가 남은 검사 (단계마다, 등급이 급한 것부터)
+const withPairs = computed(() => overview.value !== null && (overview.value.goal === 'preference' || overview.value.pairs > 0))
 const queueGroups = computed(() =>
-  [1, 2].map((stage) => ({
+  (withPairs.value ? [1, 2, 3] : [1, 2]).map((stage) => ({
     stage,
     checks: (overview.value?.checks ?? [])
       .filter((item) => item.stage === stage && item.actions.length > 0 && (item.count > 0 || doneCounts[item.key]))
       .sort((a, b) => GRADES[a.grade].rank - GRADES[b.grade].rank),
   })),
 )
-// 기다림: 서버가 아직 재지 못한 뜻 검사(까닭과 함께) + 늘 흐린 줄
-const waitingRows = computed(() => [
-  ...(overview.value?.waiting ?? []).map((item) => ({ key: item.key as string, reason: item.reason })),
-  ...[...PENDING_BY_STAGE[1], ...PENDING_BY_STAGE[2]].map((key) => ({ key, reason: ALWAYS_PENDING_REASON })),
-])
+// 기다림: 서버가 아직 재지 못한 검사(까닭과 함께)
+const waitingRows = computed(() =>
+  (overview.value?.waiting ?? []).map((item) => ({ key: item.key as string, reason: item.reason })),
+)
 // 고칠 것: 검토할 수 있는 검사(결정이 있는 것)의 남은 수. 과제 쏠림처럼 데이터셋의 모양인 것은 뺀다.
 const openTotal = computed(() =>
   (overview.value?.checks ?? []).filter((item) => item.actions.length > 0).reduce((sum, item) => sum + item.count, 0),
@@ -155,15 +165,31 @@ const doneTotal = computed(() => Object.values(doneCounts).reduce((sum, count) =
 const currentId = computed(() => ids.value[position.value] ?? null)
 const isQueueEnd = computed(() => ids.value.length > 0 && position.value >= ids.value.length)
 const decision = computed(() => (currentId.value === null ? null : decided.value.get(currentId.value) ?? null))
-// 보고 있는 대화에 이 검사의 문제가 아직 있는지 (없으면 결정 칸을 끈다)
-const isOpenHere = computed(
-  () =>
-    conversation.value !== null &&
-    !conversation.value.trashed &&
-    conversation.value.problems.some((problem) => problem.key === checkKey.value),
+// 보고 있는 쌍 (쌍 검사일 때)
+const pairHere = computed(() =>
+  isPairCheck.value ? conversation.value?.pairs.find((pair) => pair.id === currentId.value) ?? null : null,
 )
+// 보고 있는 대화(쌍)에 이 검사의 문제가 아직 있는지 (없으면 결정 칸을 끈다)
+const isOpenHere = computed(() => {
+  const current = conversation.value
+  if (current === null || current.trashed || keptMode.value) return false
+  if (isPairCheck.value) return pairHere.value !== null && !pairHere.value.trashed && pairHere.value.problems.includes(checkKey.value!)
+  return current.problems.some((problem) => problem.key === checkKey.value)
+})
+// 그대로 둔 것 보기에서 보고 있는 것이 아직 그대로 둔 것인지 ([다시 묻기])
+const isKeptHere = computed(() => {
+  const key = checkKey.value
+  if (!keptMode.value || key === null || conversation.value === null) return false
+  if (isPairCheck.value) return pairHere.value?.kept.includes(key) ?? false
+  return conversation.value.kept.includes(key)
+})
 const decidedInQueue = computed(() => ids.value.filter((id) => decided.value.has(id)).length)
 const answerCount = computed(() => conversation.value?.messages.filter((message) => message.role === 'assistant').length ?? 0)
+
+// 결정의 낱말 (쌍 검사는 쌍 빼기 · 뒤집기)
+function actionWords(action: Action): { name: string; note: string } {
+  return (isPairCheck.value ? PAIR_ACTION_WORDS[action] : undefined) ?? ACTION_WORDS[action]
+}
 
 // 결정 칸: 검사가 허락한 결정(맨 위가 규칙이 권하는 것) + 나중에
 type Option = { kind: 'action'; action: Action } | { kind: 'later' }
@@ -195,15 +221,27 @@ const canKeepJevFine = computed(
 // 다시 쓰기는 마지막 응답만 바꾼다: 이 검사의 문제가 모두 마지막 응답에 있어야 풀린다(자리 없는 것은 마지막 응답의 것).
 const isRewritable = computed(() => {
   const current = conversation.value
-  if (!current) return false
+  if (!current || !current.has_answer) return false
   const last = current.messages.length - 1
   return current.problems.filter((problem) => problem.key === checkKey.value).every((problem) => problem.turn === null || problem.turn === last)
 })
 
+// 응답 만들기를 할 수 있는지: 응답이 없고 도구 대화가 아니다
+const isAnswerable = computed(() => conversation.value !== null && !conversation.value.has_answer && !conversation.value.tools)
+
+/** 결정 칸 아래 작은 글이 '할 수 없는 까닭'이면 그 글. 없으면 null. */
+function blockedNote(action: Action): string | null {
+  const needsLlm = action === 'rewrite' || action === 'answer'
+  if (needsLlm && !llmConnected.value) return 'LLM 미연결'
+  if (action === 'rewrite' && !isRewritable.value) return '앞 턴의 응답 · 다시 쓰기로 안 풀림'
+  if (action === 'answer' && !isAnswerable.value) return '도구 대화 · 응답 만들기 안 됨'
+  return null
+}
+
 function isOptionDisabled(option: Option): boolean {
   if (busy.value) return true
   if (option.kind === 'later') return isQueueEnd.value || !ids.value.length
-  if (option.action === 'rewrite' && (!llmConnected.value || !isRewritable.value)) return true
+  if (blockedNote(option.action)) return true
   return !isOpenHere.value
 }
 // 남은 것 한 번에 할 수 있는 결정
@@ -215,7 +253,7 @@ watch(datasetId, () => {
   void loadOverview()
   void loadChanges()
 }, { immediate: true })
-watch([checkKey, datasetId], loadQueue, { immediate: true })
+watch([checkKey, datasetId, keptMode], loadQueue, { immediate: true })
 // 도우미가 데이터를 바꾸면 진단 수 · 결정 기록 · 보고 있는 대화를 다시 읽는다.
 watch(helperChanged, () => {
   void loadOverview()
@@ -262,7 +300,7 @@ async function loadQueue(): Promise<void> {
   if (!key) return
   queueLoading.value = true
   try {
-    const queue = await getReviewQueue(datasetId.value, key)
+    const queue = await getReviewQueue(datasetId.value, key, undefined, keptMode.value)
     if (key !== checkKey.value) return
     ids.value = queue.ids
     queueTotal.value = queue.total
@@ -284,7 +322,7 @@ async function loadConversation(): Promise<void> {
   const controller = new AbortController()
   conversationController = controller
   try {
-    const read = await getConversation(id, controller.signal)
+    const read = isPairCheck.value ? await getPairConversation(id, controller.signal) : await getConversation(id, controller.signal)
     if (id === currentId.value) conversation.value = read
   } catch (error) {
     if (isAbortError(error)) return
@@ -296,7 +334,7 @@ async function loadConversation(): Promise<void> {
 async function loadPartners(): Promise<void> {
   partners.value = []
   const id = currentId.value
-  if (id === null || checkKey.value !== 'near_duplicate') return
+  if (id === null || checkKey.value !== 'near_duplicate' || isPairCheck.value) return
   try {
     const found = await listNearPartners(id)
     if (id === currentId.value) partners.value = found
@@ -323,7 +361,30 @@ function prev(): void {
 }
 
 function selectCheck(key: CheckKey): void {
-  void router.replace({ query: { ...route.query, check: key } })
+  void router.replace({ query: { ...route.query, check: key, kept: undefined } })
+}
+
+/** 그대로 둔 것 보기를 켜고 끈다. */
+function toggleKept(): void {
+  void router.replace({ query: { ...route.query, kept: keptMode.value ? undefined : '1' } })
+}
+
+/** 그대로 두기를 거두고 그 검사로 다시 묻는다(그대로 둔 것 보기). */
+async function unkeep(): Promise<void> {
+  const id = currentId.value
+  const key = checkKey.value
+  if (id === null || key === null || busy.value) return
+  busy.value = true
+  try {
+    conversation.value = isPairCheck.value ? await unkeepPair(id, key) : await unkeepConversation(id, key)
+    doneCounts[key] = (doneCounts[key] ?? 0) + 1
+    next()
+    void Promise.all([afterChange(), loadChanges()])
+  } catch (error) {
+    pushToast({ tone: 'fail', title: '다시 묻기', detail: errorMessage(error), actions: [] })
+  } finally {
+    busy.value = false
+  }
 }
 
 /** 결정 하나. 바로 반영하고 다음 대화로 넘어간다. */
@@ -331,11 +392,13 @@ async function choose(action: Action): Promise<void> {
   const id = currentId.value
   const key = checkKey.value
   if (id === null || key === null || busy.value || !isOpenHere.value) return
-  if (action === 'rewrite' && !llmConnected.value) return
+  if (blockedNote(action)) return
   busy.value = true
   busyAction.value = action
   try {
-    const read = await decide(id, { check: key, action })
+    const read = isPairCheck.value
+      ? await decidePair(id, { check: key, action: action as 'drop' | 'flip' | 'keep' })
+      : await decide(id, { check: key, action })
     if (id === currentId.value) conversation.value = read.conversation
     decided.value = new Map(decided.value).set(id, read.change)
     changes.value = [read.change, ...changes.value].slice(0, CHANGE_LOG_MAX)
@@ -343,7 +406,7 @@ async function choose(action: Action): Promise<void> {
     next()
     void afterChange()
   } catch (error) {
-    pushToast({ tone: 'fail', title: ACTION_WORDS[action].name, detail: errorMessage(error), actions: [] })
+    pushToast({ tone: 'fail', title: actionWords(action).name, detail: errorMessage(error), actions: [] })
     // 다른 곳에서 이미 바뀌었을 수 있다(409). 지금 모양으로 다시 읽는다.
     void loadConversation()
   } finally {
@@ -365,16 +428,19 @@ async function undo(change: ChangeRead): Promise<void> {
     const read = await undoChange(change.id)
     changes.value = changes.value.filter((item) => item.id !== change.id)
     const key = change.check_key
-    if (decided.value.get(change.prompt_id)?.id === change.id) {
+    // 쌍 검사의 큐는 쌍 번호, 대화 검사의 큐는 대화 번호다.
+    const itemId = isPairCheck.value ? change.pair_id ?? -1 : change.prompt_id
+    if (decided.value.get(itemId)?.id === change.id) {
       const nextDecided = new Map(decided.value)
-      nextDecided.delete(change.prompt_id)
+      nextDecided.delete(itemId)
       decided.value = nextDecided
     }
     if (key && doneCounts[key]) doneCounts[key] = doneCounts[key]! - 1
-    const index = ids.value.indexOf(change.prompt_id)
+    const index = ids.value.indexOf(itemId)
     if (index >= 0 && key === checkKey.value) {
       goTo(index)
-      conversation.value = read
+      if (!isPairCheck.value) conversation.value = read
+      else void loadConversation()
     }
     void afterChange()
   } catch (error) {
@@ -399,7 +465,7 @@ async function runBulk(): Promise<void> {
     pushToast({
       tone: 'done',
       title: `${checkWords(key).name} · ${bulkName(action, confirmJevOnly.value)}`,
-      detail: `대화 ${fmt(result.changed)}건 · 결정 기록에서 하나씩 되돌리기`,
+      detail: `${isPairCheck.value ? '쌍' : '대화'} ${fmt(result.changed)}건 · 결정 기록에서 하나씩 되돌리기`,
       actions: [],
     })
     await Promise.all([afterChange(), loadChanges()])
@@ -414,7 +480,8 @@ async function runBulk(): Promise<void> {
 /** 한 번에 하는 결정의 이름. */
 function bulkName(action: 'drop' | 'keep', jevOnly: boolean): string {
   if (jevOnly) return 'Jev 괜찮음 모두 그대로 두기'
-  return action === 'drop' ? '모두 빼기' : '모두 그대로 두기'
+  if (action === 'drop') return isPairCheck.value ? '쌍 모두 빼기' : '모두 빼기'
+  return '모두 그대로 두기'
 }
 
 function openBulk(action: 'drop' | 'keep', jevOnly: boolean): void {
@@ -424,7 +491,7 @@ function openBulk(action: 'drop' | 'keep', jevOnly: boolean): void {
 
 /** 1~n 결정 · ← → 앞뒤 · Z 되돌리기. 입력 칸 · 확인 창 · 수정 키와 함께면 받지 않는다. */
 function onKeydown(event: KeyboardEvent): void {
-  if (event.metaKey || event.ctrlKey || event.altKey || confirmAction.value) return
+  if (event.metaKey || event.ctrlKey || event.altKey || confirmAction.value || keptMode.value) return
   const target = event.target as HTMLElement | null
   if (target?.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return
   const number = Number(event.key)
@@ -529,12 +596,28 @@ const nextCheck = computed(() => {
             <span><b class="font-semibold text-foreground" data-position>{{ position + 1 }}</b> / {{ fmt(ids.length) }}</span>
             <template v-if="queueTotal > ids.length"><span class="text-border-strong">·</span>전체 {{ fmt(queueTotal) }}</template>
             <template v-if="conversation">
+              <template v-if="isPairCheck && currentId !== null">
+                <span class="text-border-strong">·</span><span class="font-mono">쌍 #{{ currentId }}</span>
+              </template>
               <span class="text-border-strong">·</span><span class="font-mono">#{{ conversation.id }}</span>
               <span class="text-border-strong">·</span>{{ SOURCE_WORDS[conversation.source] ?? conversation.source }}
               <span class="text-border-strong">·</span>응답 {{ answerCount }}
             </template>
           </span>
-          <span class="ml-auto flex gap-1">
+          <Button
+            v-if="check && (check.kept || keptMode)"
+            type="button"
+            variant="outline"
+            size="xs"
+            class="ml-auto"
+            :aria-pressed="keptMode"
+            :class="keptMode ? 'border-primary/40 bg-accent text-accent-foreground hover:bg-accent' : ''"
+            data-action="toggle-kept"
+            @click="toggleKept"
+          >
+            그대로 둔 {{ fmt(check.kept) }}
+          </Button>
+          <span class="flex gap-1" :class="check && (check.kept || keptMode) ? '' : 'ml-auto'">
             <Button type="button" variant="quiet" size="icon-sm" aria-label="앞 대화" :disabled="position <= 0" @click="prev">
               <ArrowLeft />
             </Button>
@@ -553,7 +636,9 @@ const nextCheck = computed(() => {
           <Skeleton class="h-4 w-5/6" />
         </div>
         <div v-else-if="!checkKey || !ids.length" class="flex h-40 flex-col items-center justify-center gap-3 text-ui" data-review-empty>
-          <span class="inline-flex items-center gap-2 font-semibold text-success-ink"><CircleCheck class="size-4 text-success" />남은 것 없음</span>
+          <span class="inline-flex items-center gap-2 font-semibold text-success-ink">
+            <CircleCheck class="size-4 text-success" />{{ keptMode ? '그대로 둔 것 없음' : '남은 것 없음' }}
+          </span>
           <Button v-if="nextCheck" variant="outline" size="sm" @click="selectCheck(nextCheck.key)">
             {{ checkWords(nextCheck.key).name }} {{ fmt(nextCheck.count) }}<ArrowRight />
           </Button>
@@ -582,15 +667,19 @@ const nextCheck = computed(() => {
           >
             <template v-if="decision">
               <CircleCheck class="size-4 text-success" />
-              <b class="font-semibold">결정 · {{ ACTION_WORDS[decision.action].name }}</b>
+              <b class="font-semibold">결정 · {{ actionWords(decision.action).name }}</b>
               <WhoTag :who="ACTION_WHO[decision.action]" />
               <Button type="button" variant="outline" size="xs" class="ml-auto" :disabled="busy" @click="undo(decision)">
                 <Undo2 />되돌리기
               </Button>
             </template>
+            <template v-else-if="keptMode">
+              <Clock class="size-4 text-muted-foreground" />
+              <b class="font-semibold text-muted-foreground">{{ isKeptHere ? '그대로 둠' : '다시 물음' }}</b>
+            </template>
             <template v-else>
               <Clock class="size-4 text-muted-foreground" />
-              <b class="font-semibold text-muted-foreground">{{ conversation.trashed ? '휴지통' : '문제 없음' }}</b>
+              <b class="font-semibold text-muted-foreground">{{ conversation.trashed || pairHere?.trashed ? '휴지통' : '문제 없음' }}</b>
             </template>
           </div>
           <div
@@ -608,6 +697,9 @@ const nextCheck = computed(() => {
             <span v-if="jevFacts.similarity !== null">
               지시 ↔ 응답 뜻 <b class="font-semibold text-foreground">{{ jevFacts.similarity.toFixed(2) }}</b>
             </span>
+            <span v-if="jevFacts.unsafe !== null">
+              해로움 <b class="font-semibold text-foreground">{{ jevFacts.unsafe.toFixed(2) }}</b>
+            </span>
             <span v-if="jevFacts.looks_fine && checkKey !== 'mismatch'" class="font-semibold text-success-ink">괜찮음</span>
           </div>
           <div v-if="partners.length" class="border-b px-[18px] py-2" data-review-partners>
@@ -624,8 +716,9 @@ const nextCheck = computed(() => {
               </span>
             </div>
           </div>
-          <div class="px-[18px] pt-1 pb-2">
-            <ConversationView :conversation="conversation" :grades="grades" :focus="checkKey" />
+          <div class="px-[18px] pt-1 pb-3">
+            <PairView v-if="isPairCheck && currentId !== null" :conversation="conversation" :pair-id="currentId" :grades="grades" />
+            <ConversationView v-else :conversation="conversation" :grades="grades" :focus="checkKey" />
           </div>
         </template>
         <div v-else class="space-y-3 px-[18px] py-4">
@@ -636,7 +729,17 @@ const nextCheck = computed(() => {
 
       <!-- 오른쪽: 결정 · 결정 기록 · 남은 것 한 번에 -->
       <div class="grid gap-3.5 @min-[70rem]:sticky @min-[70rem]:top-16">
-        <section class="card p-3.5" aria-label="결정" data-decide>
+        <section v-if="keptMode" class="card grid gap-2 p-3.5" aria-label="그대로 둔 것" data-kept-panel>
+          <div class="caps">그대로 둔 것</div>
+          <Button type="button" variant="outline" class="justify-start" :disabled="busy || !isKeptHere" data-action="unkeep" @click="unkeep">
+            <RotateCcw />다시 묻기
+          </Button>
+          <small class="text-meta text-muted-foreground">그대로 두기 거둠 · 이 검사의 문제로 다시</small>
+          <Button type="button" variant="quiet" size="sm" class="justify-start" @click="toggleKept">
+            <ArrowLeft />남은 것으로
+          </Button>
+        </section>
+        <section v-else class="card p-3.5" aria-label="결정" data-decide>
           <div class="caps mb-2">결정</div>
           <div class="grid gap-2">
             <button
@@ -659,16 +762,15 @@ const nextCheck = computed(() => {
               <span class="min-w-0">
                 <span class="flex flex-wrap items-center gap-1.5">
                   <template v-if="option.kind === 'action'">
-                    <b class="font-semibold">{{ ACTION_WORDS[option.action].name }}</b>
+                    <b class="font-semibold">{{ actionWords(option.action).name }}</b>
                     <WhoTag :who="ACTION_WHO[option.action]" />
                   </template>
                   <b v-else class="inline-flex items-center gap-1 font-semibold"><SkipForward class="size-3.5" />나중에</b>
                 </span>
                 <small class="mt-0.5 block text-meta text-muted-foreground">
-                  <template v-if="option.kind === 'action' && option.action === 'rewrite' && !llmConnected">LLM 미연결</template>
-                  <template v-else-if="option.kind === 'action' && option.action === 'rewrite' && !isRewritable">앞 턴의 응답 · 다시 쓰기로 안 풀림</template>
+                  <template v-if="option.kind === 'action' && blockedNote(option.action)">{{ blockedNote(option.action) }}</template>
                   <template v-else-if="option.kind === 'action'">
-                    {{ option.action === recommended ? `${recommendedBy} · ` : '' }}{{ ACTION_WORDS[option.action].note }}
+                    {{ option.action === recommended ? `${recommendedBy} · ` : '' }}{{ actionWords(option.action).note }}
                   </template>
                   <template v-else>건너뛰고 다음</template>
                 </small>
@@ -690,7 +792,9 @@ const nextCheck = computed(() => {
               class="grid grid-cols-[3.25rem_minmax(0,1fr)_auto] items-center gap-1.5 border-b py-1.5 last:border-b-0"
               :data-change="change.id"
             >
-              <span class="font-mono text-muted-foreground tabular-nums">#{{ change.prompt_id }}</span>
+              <span class="font-mono text-muted-foreground tabular-nums" :title="change.pair_id ? `쌍 #${change.pair_id}` : undefined">
+                #{{ change.prompt_id }}
+              </span>
               <span class="flex min-w-0 items-center gap-1.5">
                 <span class="truncate">{{ change.check_key ? checkWords(change.check_key).name : '' }} · {{ ACTION_DONE_WORDS[change.action] }}</span>
                 <span class="shrink-0 text-meta text-subtle-foreground">{{ clockText(change.created_at) }}</span>
@@ -703,8 +807,8 @@ const nextCheck = computed(() => {
           <div v-else class="py-1 text-meta text-subtle-foreground">없음</div>
         </section>
 
-        <section v-if="check && check.count && bulkActions.length" class="card grid gap-2 p-3.5" aria-label="남은 것 한 번에">
-          <div class="caps">남은 {{ fmt(check.count) }}건 한 번에</div>
+        <section v-if="check && check.count && bulkActions.length && !keptMode" class="card grid gap-2 p-3.5" aria-label="남은 것 한 번에">
+          <div class="caps">남은 {{ fmt(check.count) }}{{ isPairCheck ? '쌍' : '건' }} 한 번에</div>
           <Button
             v-for="action in bulkActions"
             :key="action"
@@ -742,11 +846,11 @@ const nextCheck = computed(() => {
           <dl class="grid grid-cols-[84px_minmax(0,1fr)] gap-x-2.5 gap-y-1.5 text-ui">
             <dt class="text-muted-foreground">검사</dt>
             <dd class="font-semibold">{{ checkWords(check.key).name }}</dd>
-            <dt class="text-muted-foreground">대화</dt>
+            <dt class="text-muted-foreground">{{ isPairCheck ? '쌍' : '대화' }}</dt>
             <dd v-if="confirmJevOnly">Jev가 지시 따름 · 거절 마땅으로 본 것 (≥ 0.8)</dd>
             <dd v-else><b class="font-semibold">{{ fmt(check.count) }}</b></dd>
             <dt class="text-muted-foreground">결정</dt>
-            <dd>{{ ACTION_WORDS[confirmAction].name }} · {{ ACTION_WORDS[confirmAction].note }}</dd>
+            <dd>{{ actionWords(confirmAction).name }} · {{ actionWords(confirmAction).note }}</dd>
             <dt class="text-muted-foreground">되돌리기</dt>
             <dd>결정 기록에서 한 건씩</dd>
           </dl>

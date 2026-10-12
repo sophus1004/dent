@@ -3,15 +3,20 @@
     종합 상태   StatusCard. 등급 수 · 대화 · 휴지통 · 흐름 줄 한 줄 · 다음 할 일
     검사 카드   한 장: 고른 단계(처음엔 지금 단계). 흐름 줄의 단계 칩을 누르면 바뀐다(주소 ?stage=).
                 검사 줄의 [→]는 그 검사의 검토 큐(#/generation/<id>/review?check=)로 간다.
-    뜻 검사     고른 단계의 뜻 분석 검사(1 근접 중복 · 과제 쏠림 · 평가셋 오염, 2 지시 불일치). 재지 못한 것은 흐린 줄(—)과 까닭.
+    뜻 검사     고른 단계의 뜻 · 대조 · 판정 검사(1 근접 중복 · 과제 쏠림 · 평가셋 오염, 2 지시 불일치 · 안전,
+                3 판정 반대 · 작은 마진). 재지 못한 것은 흐린 줄(—)과 까닭. 평가셋이 없으면 [평가셋 가져오기]
+                (새 데이터셋 가져오기를 '평가셋' 켬으로 연다).
                 머리에 뜻 분석 만들기 칸(AnalysisAction) · [의미 지도] · 임베딩이 없으면 [연결 설정].
     분포        턴 수(응답 수)별 대화 수
+  3 선호는 만들 데이터가 선호이거나 쌍이 있을 때만 있다(설정에서 고른다).
   숫자는 GET …/overview 한 번. 작업이 데이터를 바꾸거나 뜻 분석이 끝나면 조용히 다시 읽는다.
   이 탭은 데이터를 바꾸지 않는다([뜻 분석 만들기]만 작업을 넣는다).
 -->
 <script setup lang="ts">
 import {
   ArrowRight,
+  FlaskConical,
+  GitCompare,
   LoaderCircle,
   MessageSquareText,
   Plug,
@@ -33,7 +38,7 @@ import { Button } from '@/system/ui/button'
 import { Skeleton } from '@/system/ui/skeleton'
 
 import { getOverview } from '@/modules/generation/api'
-import { CHECK_WORDS, PENDING_BY_STAGE, PENDING_WORDS, SEMANTIC_KEYS, checkWords, toCheck } from '@/modules/generation/checks'
+import { CHECK_WORDS, SEMANTIC_KEYS, checkWords, toCheck } from '@/modules/generation/checks'
 import BinCard from '@/modules/generation/diagnosis/BinCard.vue'
 import StatusCard from '@/modules/generation/diagnosis/StatusCard.vue'
 import { jobFinished } from '@/modules/generation/jobEvents'
@@ -49,11 +54,15 @@ const props = defineProps<{
 // 읽는 동안 보일 회색 줄 수
 const SKELETON_ROWS = 5
 
-// 단계 카드 머리 (1 지시 · 2 응답)
+// 단계 카드 머리 (1 지시 · 2 응답 · 3 선호)
 const STAGES: Record<number, { name: string; icon: LucideIcon }> = {
   1: { name: '지시', icon: MessageSquareText },
   2: { name: '응답', icon: Reply },
+  3: { name: '선호', icon: GitCompare },
 }
+
+// 평가셋이 없어 오염을 재지 못한 까닭 (서버의 기다림 글)
+const NO_EVAL_REASON = '평가셋 없음'
 
 // 턴 수 분포에서 한 칸으로 묶는 턴 수 (이 수 이상은 'n턴+')
 const TURN_BINS_MAX = 5
@@ -72,12 +81,16 @@ const checks = computed(() =>
   overview.value ? overview.value.checks.map((check) => toCheck(check, datasetId.value, overview.value!.conversations)) : [],
 )
 
-// 고른 단계: 주소 ?stage= → 없으면 지금 단계(내보내기면 응답) → 입구
+// 3 선호가 있는지: 만들 데이터가 선호이거나 쌍이 있다
+const withPairs = computed(() => overview.value !== null && (overview.value.goal === 'preference' || overview.value.pairs > 0))
+const stageNos = computed(() => (withPairs.value ? [1, 2, 3] : [1, 2]))
+
+// 고른 단계: 주소 ?stage= → 없으면 지금 단계(내보내기면 마지막 단계) → 입구
 const selected = computed(() => {
   const asked = Number(route.query.stage)
-  if (asked in STAGES) return asked
+  if (stageNos.value.includes(asked)) return asked
   const now = overview.value?.now_stage ?? props.dataset.entry_stage
-  return now in STAGES ? now : 2
+  return stageNos.value.includes(now) ? now : stageNos.value[stageNos.value.length - 1]
 })
 const isSemantic = (key: string) => (SEMANTIC_KEYS as string[]).includes(key)
 const stageChecks = computed(() =>
@@ -88,10 +101,10 @@ const semanticChecks = computed(() =>
   checks.value.filter((check, index) => overview.value!.checks[index].stage === selected.value && isSemantic(check.key)),
 )
 const stageWaiting = computed(() => (overview.value?.waiting ?? []).filter((item) => item.stage === selected.value))
-const pending = computed(() => [...stageWaiting.value.map((item) => item.key), ...(PENDING_BY_STAGE[selected.value] ?? [])])
-const semanticWords = { ...CHECK_WORDS, ...PENDING_WORDS }
-// 뜻 분석 전이 아닌 까닭(Jev 미연결 등)은 카드 머리에 한 줄로
+const pending = computed(() => stageWaiting.value.map((item) => item.key))
+// 뜻 분석 전이 아닌 까닭(Jev 미연결 · 평가셋 없음 등)은 카드 머리에 한 줄로
 const waitingNotes = computed(() => stageWaiting.value.filter((item) => item.reason !== '뜻 분석 전'))
+const needsEvalSet = computed(() => stageWaiting.value.some((item) => item.reason === NO_EVAL_REASON))
 
 // 턴 수 분포: 1턴 · 2턴 … · n턴+
 const turnBins = computed<BinRead[]>(() => {
@@ -226,7 +239,7 @@ async function loadOverview(): Promise<void> {
         :icon="Sparkles"
         name="뜻 검사"
         :checks="semanticChecks"
-        :words="semanticWords"
+        :words="CHECK_WORDS"
         :pending="pending"
         data-semantic-card
       >
@@ -259,6 +272,11 @@ async function loadOverview(): Promise<void> {
           </Button>
           <Button v-if="!embeddingConnected" type="button" variant="outline" size="sm" @click="openConnectionSettings">
             <Plug />연결 설정
+          </Button>
+          <Button v-if="needsEvalSet" variant="outline" size="sm" as-child>
+            <RouterLink :to="{ name: 'generation-new', query: { eval: '1' } }" data-action="import-eval">
+              <FlaskConical />평가셋 가져오기
+            </RouterLink>
           </Button>
         </template>
       </CheckGroup>

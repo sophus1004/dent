@@ -1,0 +1,15 @@
+{
+  "key": "tools",
+  "rows": 16,
+  "planted": [
+    {
+      "name": "도구 호출 형식",
+      "count": 6,
+      "unit": "건"
+    }
+  ],
+  "checks": {
+    "tool_call": 6
+  },
+  "semantic": {}
+}

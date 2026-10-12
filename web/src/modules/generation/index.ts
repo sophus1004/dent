@@ -1,4 +1,4 @@
-// 생성 모듈: 지시 · 응답 대화로 된 LLM 학습 데이터(첫 판은 SFT). system에 이 모양(DentModule)으로 내놓는다.
+// 생성 모듈: 지시 · 응답 대화로 된 LLM 학습 데이터(SFT · 선호 쌍 · 지시만 · 도구 호출). system에 이 모양(DentModule)으로 내놓는다.
 import { Plus } from '@lucide/vue'
 
 import type { DentModule } from '@/system/module'
@@ -34,6 +34,10 @@ const generation: DentModule = {
     // 도우미 실행(AI로 고치기 포함). 다시 하기는 도우미 창의 [다시 시작]으로 한다.
     helper: { name: '도우미' },
     export: { name: '내보내기', phases: { writing: '쓰기' } },
+    // 학습할 모델 · 최대 길이를 바꾸면 토크나이저를 받아 모든 대화의 길이를 다시 잰다.
+    length: { name: '길이 재기' },
+    // 평가셋이 바뀌면 지시를 평가셋과 다시 대조한다.
+    contamination: { name: '오염 대조' },
   },
   // 가져오기가 끝나면 새 데이터셋 · 수가 사이드바와 홈에 보이게 목록을 다시 읽는다.
   // 그 밖의 작업이 끝나면 데이터셋 화면(머리 · 진단)이 다시 읽게 알린다.

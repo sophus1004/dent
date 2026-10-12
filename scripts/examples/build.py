@@ -995,6 +995,233 @@ def build_gen_chat() -> None:
     print(f"chat.jsonl {len(rows)}줄")
 
 
+# ---------- 생성: 지시만 · 도구 호출 · 선호 쌍 ----------
+
+GEN_PROMPT_DUPLICATES = 2  # 똑같은 지시 사본 (같은 지시 여분)
+GEN_PROMPT_PII = 1  # 예약된 이메일을 넣은 지시
+
+GEN_TOOL_BAD_JSON = 2  # 인자 JSON을 깨뜨린 호출
+GEN_TOOL_UNDEFINED = 2  # 정의에 없는 도구 이름으로 바꾼 호출
+GEN_TOOL_MISSING_ARG = 1  # 꼭 있어야 할 인자를 뺀 호출
+GEN_TOOL_WRONG_TYPE = 1  # 정수 인자를 글로 바꾼 호출
+
+GEN_PAIR_SAME = 2  # 고른 응답과 버린 응답이 같은 쌍
+GEN_PAIR_TIE = 2  # 두 점수가 같은 쌍 (동점)
+GEN_PAIR_REVERSED = 3  # 엉뚱한 응답을 고른 쪽에 둔 쌍 (판정 반대, Jev가 잡는다)
+
+# 버린 응답으로 쓰는 흐릿한 답 (지시에 답하지 않는다)
+GEN_VAGUE = (
+    "좋은 질문입니다. 상황에 따라 다르니 직접 확인해 보시는 것이 좋겠습니다.",
+    "그 부분은 여러 가지를 함께 따져 봐야 해서 한마디로 말하기 어렵습니다.",
+    "말씀하신 내용은 잘 알겠습니다. 필요하면 다시 물어봐 주세요.",
+)
+
+
+def build_gen_prompts() -> None:
+    """지시만 데이터: 응답 없이 지시만 있는 Alpaca 모양(응답 만들기를 해 볼 입구 1). 같은 지시 · 개인정보를 조금 심는다."""
+    items = read_jsonl(CONTENT / "gen_prompts" / "prompts.jsonl")
+    rng = random.Random(SEED)
+    rows = [dict(item) for item in items]
+    for index in rng.sample(range(len(rows)), GEN_PROMPT_PII):
+        rows[index] = {
+            **rows[index],
+            "instruction": rows[index]["instruction"] + " 답은 help@example.com으로도 보내 줘.",
+        }
+    rows += [dict(rows[index]) for index in rng.sample(range(len(items)), GEN_PROMPT_DUPLICATES)]
+    rng.shuffle(rows)
+
+    def user_text(row: dict[str, Any]) -> str:
+        return row["instruction"] + (f"\n\n{row['input']}" if row.get("input") else "")
+
+    checks: dict[str, int] = {"no_answer": len(rows)}
+    for row in rows:
+        for key in generation_rules.measure([{"role": "user", "content": user_text(row)}]):
+            checks[key] = checks.get(key, 0) + 1
+    hashes = [context_hash([{"role": "user", "content": user_text(row)}]) for row in rows]
+    checks["duplicate"] = len(hashes) - len(set(hashes))
+    GENERATION_OUT.mkdir(parents=True, exist_ok=True)
+    with (GENERATION_OUT / "prompts.jsonl").open("w", encoding="utf-8") as file:
+        for row in rows:
+            file.write(
+                json.dumps(
+                    {key: value for key, value in row.items() if key != "task"}, ensure_ascii=False
+                )
+                + "\n"
+            )
+    planted = [
+        ("응답 없음", checks["no_answer"]),
+        ("같은 지시", checks["duplicate"]),
+        ("개인정보", checks.get("pii", 0)),
+    ]
+    write_answers(
+        GENERATION_OUT / "prompts.answers.json",
+        {
+            "key": "prompts",
+            "rows": len(rows),
+            "planted": [
+                {"name": name, "count": count, "unit": "건"} for name, count in planted if count
+            ],
+            "checks": dict(sorted(checks.items())),
+            "semantic": {},
+        },
+    )
+    print(f"prompts.jsonl {len(rows)}줄 · 검사 {checks}")
+
+
+def build_gen_tools() -> None:
+    """도구 호출 대화: 달라마켓 상담 도구(주문 · 택배 · 상품 · 매장 · 취소)를 부르는 messages + tools. 호출 형식 문제를 심는다."""
+    items = read_jsonl(CONTENT / "gen_tools" / "tools.jsonl")
+    for item in items:
+        if generation_rules.measure(item["messages"], tools=item["tools"]):
+            sys.exit("도구 원고에 규칙 문제가 있습니다.")
+    rng = random.Random(SEED)
+    rows = [json.loads(json.dumps(item, ensure_ascii=False)) for item in items]
+    with_calls = [
+        index for index, row in enumerate(rows) if any(m.get("tool_calls") for m in row["messages"])
+    ]
+    used: set[int] = set()
+
+    def first_call(row: dict[str, Any]) -> dict[str, Any]:
+        return next(m for m in row["messages"] if m.get("tool_calls"))["tool_calls"][0]["function"]
+
+    def pick(count: int, fits: Any = None) -> list[int]:
+        free = [
+            index
+            for index in with_calls
+            if index not in used and (fits is None or fits(rows[index]))
+        ]
+        picked = rng.sample(free, count)
+        used.update(picked)
+        return picked
+
+    for index in pick(GEN_TOOL_BAD_JSON):
+        function = first_call(rows[index])
+        function["arguments"] = function["arguments"][:-1]
+    for index in pick(GEN_TOOL_UNDEFINED):
+        function = first_call(rows[index])
+        function["name"] = function["name"].replace("get_", "lookup_").replace("_", "", 1) + "_v2"
+    for index in pick(
+        GEN_TOOL_MISSING_ARG, lambda row: first_call(row)["name"] != "search_products"
+    ):
+        first_call(rows[index])["arguments"] = "{}"
+
+    def has_price(row: dict[str, Any]) -> bool:
+        return '"max_price"' in first_call(row)["arguments"]
+
+    for index in pick(GEN_TOOL_WRONG_TYPE, has_price):
+        function = first_call(rows[index])
+        arguments = json.loads(function["arguments"])
+        arguments["max_price"] = f"{arguments['max_price']}원"
+        function["arguments"] = json.dumps(arguments, ensure_ascii=False)
+    rng.shuffle(rows)
+    checks: dict[str, int] = {}
+    for row in rows:
+        for key in generation_rules.measure(row["messages"], tools=row["tools"]):
+            checks[key] = checks.get(key, 0) + 1
+    GENERATION_OUT.mkdir(parents=True, exist_ok=True)
+    with (GENERATION_OUT / "tools.jsonl").open("w", encoding="utf-8") as file:
+        for row in rows:
+            file.write(json.dumps(row, ensure_ascii=False) + "\n")
+    write_answers(
+        GENERATION_OUT / "tools.answers.json",
+        {
+            "key": "tools",
+            "rows": len(rows),
+            "planted": [
+                {"name": "도구 호출 형식", "count": checks.get("tool_call", 0), "unit": "건"}
+            ],
+            "checks": dict(sorted(checks.items())),
+            "semantic": {},
+        },
+    )
+    print(f"tools.jsonl {len(rows)}줄 · 검사 {checks}")
+
+
+def build_gen_pref() -> None:
+    """선호 쌍: SFT 원고의 한 턴 대화로 고른 응답(원고의 답) · 버린 응답(다른 과제의 답 · 흐릿한 답 · 앞부분만)을 만든다.
+
+    TRL 선호 모양(chosen · rejected 대화 목록)에 원본 점수(score_chosen · score_rejected)를 함께 둔다.
+    같은 쌍 · 동점 · 판정 반대(엉뚱한 답을 고른 쪽에 둠, 뜻 분석의 Jev가 잡는다)를 심는다.
+    """
+    items = [
+        item for item in read_jsonl(CONTENT / "gen_sft" / "sft.jsonl") if len(item["messages"]) == 2
+    ]
+    rng = random.Random(SEED)
+    rows: list[dict[str, Any]] = []
+    kinds = ("other", "vague", "partial")
+    for index, item in enumerate(items):
+        prompt = item["messages"][:-1]
+        good = _answer(item)
+        kind = kinds[index % len(kinds)]
+        if kind == "other":
+            bad = _answer(rng.choice([x for x in items if x["task"] != item["task"]]))
+        elif kind == "vague":
+            bad = GEN_VAGUE[index % len(GEN_VAGUE)]
+        else:
+            bad = good.split("\n")[0].split(". ")[0].rstrip(".") + "."
+        if bad.strip() == good.strip():
+            bad = GEN_VAGUE[index % len(GEN_VAGUE)]
+        rows.append(
+            {
+                "chosen": [*prompt, {"role": "assistant", "content": good}],
+                "rejected": [*prompt, {"role": "assistant", "content": bad}],
+                "score_chosen": 8.0 + (index % 3) * 0.5,
+                "score_rejected": 3.0 + (index % 4) * 0.5,
+                "kind": kind,
+            }
+        )
+    order = list(range(len(rows)))
+    rng.shuffle(order)
+    same, tie, reversed_ = (
+        order[:GEN_PAIR_SAME],
+        order[GEN_PAIR_SAME : GEN_PAIR_SAME + GEN_PAIR_TIE],
+        [i for i in order[GEN_PAIR_SAME + GEN_PAIR_TIE :] if rows[i]["kind"] == "other"][
+            :GEN_PAIR_REVERSED
+        ],
+    )
+    for index in same:
+        rows[index]["rejected"] = [dict(m) for m in rows[index]["chosen"]]
+    for index in tie:
+        rows[index]["score_rejected"] = rows[index]["score_chosen"]
+    for index in reversed_:
+        row = rows[index]
+        row["chosen"], row["rejected"] = row["rejected"], row["chosen"]
+        row["score_chosen"], row["score_rejected"] = row["score_rejected"], row["score_chosen"]
+    rng.shuffle(rows)
+    if any(generation_rules.measure(row["chosen"]) for row in rows):
+        sys.exit("선호 쌍의 고른 응답에 규칙 문제가 있습니다.")
+    checks: dict[str, int] = {}
+    for row in rows:
+        chosen, rejected = row["chosen"][-1]["content"], row["rejected"][-1]["content"]
+        marks = generation_rules.measure_pair(
+            chosen, rejected, chosen_score=row["score_chosen"], rejected_score=row["score_rejected"]
+        )
+        for key in marks:
+            checks[key] = checks.get(key, 0) + 1
+        if len(chosen) > len(rejected):
+            checks["length_bias"] = checks.get("length_bias", 0) + 1
+    GENERATION_OUT.mkdir(parents=True, exist_ok=True)
+    with (GENERATION_OUT / "pref.jsonl").open("w", encoding="utf-8") as file:
+        for row in rows:
+            file.write(
+                json.dumps({k: v for k, v in row.items() if k != "kind"}, ensure_ascii=False) + "\n"
+            )
+    write_answers(
+        GENERATION_OUT / "pref.answers.json",
+        {
+            "key": "pref",
+            "rows": len(rows),
+            "planted": [
+                {"name": "같은 쌍 · 동점", "count": checks.get("same_pair", 0), "unit": "쌍"},
+                {"name": "판정 반대", "count": len(reversed_), "unit": "쌍"},
+            ],
+            "checks": dict(sorted(checks.items())),
+            "semantic": {"judge_reversed": len(reversed_)},
+        },
+    )
+    print(f"pref.jsonl {len(rows)}줄 · 검사 {checks} · 판정 반대 {len(reversed_)}")
+
+
 BUILDERS = {
     "topics": build_topics,
     "intents": build_intents,
@@ -1004,6 +1231,9 @@ BUILDERS = {
     "company": build_company,
     "sft": build_gen_sft,
     "chat": build_gen_chat,
+    "prompts": build_gen_prompts,
+    "tools": build_gen_tools,
+    "pref": build_gen_pref,
 }
 
 

@@ -1,7 +1,8 @@
 <!--
   대화 상세 패널: 표에서 대화를 누르면 오른쪽에 열린다(분류 문장 패널과 같은 틀). 넓은 화면에서는 표 옆에, 좁으면 표 위에 뜬다.
     머리     대화 #번호 · 이전(K) · 다음(J) · 닫기(Esc)
-    몸       상태 · 출처 · 문제 · Jev(뜻 분석이 물었으면) · 그대로 둔 검사 · 고치기 · 대화(ConversationView, 문제 자리 칠함) · 메타데이터 · 가져온 곳
+    몸       상태 · 출처 · 문제 · Jev(뜻 분석이 물었으면) · 그대로 둔 검사 · 도구 정의 · 고치기 · 대화(ConversationView, 문제 자리 칠함)
+             · 선호 쌍(PairView, 쌍마다) · 메타데이터 · 가져온 곳
     바닥     단축키
   고치기는 [휴지통으로] · [되살리기](POST conversations/bulk)다. 바꾸면 changed를 알려 부모가 목록 · 머리 건수 · 이 대화를 다시 읽는다.
   문제마다 고치는 결정(빼기 · 가리기 · 자르기 · 그대로 두기)은 검토 화면에서 한다([검토]가 그 검사의 큐를 연다).
@@ -24,6 +25,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/system/ui/tooltip'
 import { bulkUpdateConversations } from '@/modules/generation/api'
 import { SOURCE_WORDS, checkWords } from '@/modules/generation/checks'
 import ConversationView from '@/modules/generation/ConversationView.vue'
+import PairView from '@/modules/generation/PairView.vue'
 import type { CheckKey, ConversationRead, Grade } from '@/modules/generation/types'
 
 const props = defineProps<{
@@ -57,8 +59,20 @@ const source = ref<ImportRead | null>(null)
 const moving = ref(false)
 const moveError = ref<string | null>(null)
 
-// 문제 검사들 (같은 검사가 여러 자리에 있어도 한 번)
-const problemKeys = computed(() => [...new Set(props.conversation?.problems.map((problem) => problem.key) ?? [])])
+// 문제 검사들 (같은 검사가 여러 자리에 있어도 한 번, 쌍의 문제도)
+const problemKeys = computed(() => [
+  ...new Set([
+    ...(props.conversation?.problems.map((problem) => problem.key) ?? []),
+    ...(props.conversation?.pairs.flatMap((pair) => pair.problems) ?? []),
+  ]),
+])
+// 도구 정의의 이름들
+const toolNames = computed(() =>
+  (props.conversation?.tools ?? []).map((tool) => {
+    const body = (tool.function ?? tool) as { name?: unknown }
+    return String(body.name ?? '?')
+  }),
+)
 const extraFields = computed(() => Object.entries(props.conversation?.extra ?? {}))
 const characters = computed(() => props.conversation?.messages.reduce((sum, message) => sum + message.content.length, 0) ?? 0)
 
@@ -190,6 +204,15 @@ function tone(key: CheckKey): string {
             <span v-if="conversation.jev.refusal_ok !== null">
               거절 마땅 <b class="font-semibold text-foreground">{{ conversation.jev.refusal_ok.toFixed(2) }}</b>
             </span>
+            <span v-if="conversation.jev.unsafe !== null">
+              해로움 <b class="font-semibold text-foreground">{{ conversation.jev.unsafe.toFixed(2) }}</b>
+            </span>
+          </dd>
+        </template>
+        <template v-if="toolNames.length">
+          <dt class="text-muted-foreground">도구</dt>
+          <dd class="flex flex-wrap items-center gap-1 font-mono text-meta">
+            <span v-for="(name, index) in toolNames" :key="index" class="rounded bg-muted px-1">{{ name }}</span>
           </dd>
         </template>
         <template v-if="conversation.kept.length">
@@ -251,6 +274,17 @@ function tone(key: CheckKey): string {
         </div>
         <div class="rounded-lg border px-3">
           <ConversationView :conversation="conversation" :grades="grades" />
+        </div>
+      </section>
+
+      <section v-if="conversation.pairs.length" data-panel-pairs>
+        <div :class="FIELD_LABEL_CLASS">
+          선호 쌍<span class="ml-auto font-normal text-muted-foreground">{{ conversation.pairs.length }}</span>
+        </div>
+        <div class="grid gap-3">
+          <div v-for="pair in conversation.pairs" :key="pair.id" class="rounded-lg border px-3 pt-1 pb-3">
+            <PairView :conversation="conversation" :pair-id="pair.id" :grades="grades" />
+          </div>
         </div>
       </section>
 

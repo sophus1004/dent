@@ -9,6 +9,8 @@
   파일 가져오기가 실패하면 서버가 원본을 지우므로 [다시 올리기]로 1단계에 돌아간다. 이름은 그대로 두어 만든 데이터셋에 다시 넣는다.
   주소의 ?source=file 또는 ?source=huggingface면 그 칸을 보라 테두리로 미리 골라 둔다.
   데이터 추가는 있던 데이터셋에 넣는다(같은 지시는 합치지 않고 진단의 '같은 지시'가 잡는다). 끝나면 [데이터셋으로].
+  새 데이터셋은 1 · 4단계에 '평가셋' 켬 · 끔을 둔다(주소 ?eval=1이면 켬: 진단의 [평가셋 가져오기]). 켜면 가져오기를 시작한 뒤
+  그 데이터셋을 평가셋으로 표시해 다른 데이터셋의 오염 대조가 들어간다.
 -->
 <script setup lang="ts">
 import { Database, MessageSquareText } from '@lucide/vue'
@@ -35,7 +37,10 @@ import {
 import type { ImportRead, ImportSource } from '@/system/types'
 import { Input } from '@/system/ui/input'
 
-import { createImport, getDataset, installExample, listExamples } from '@/modules/generation/api'
+import { Segmented, type SegmentedOption } from '@/system/ui/segmented'
+import { pushToast } from '@/system/toasts'
+
+import { createImport, getDataset, installExample, listExamples, updateSettings } from '@/modules/generation/api'
 import { loadDatasets } from '@/modules/generation/datasets'
 import MappingStep from '@/modules/generation/MappingStep.vue'
 import type { DatasetRead, FieldMapping, Shape } from '@/modules/generation/types'
@@ -53,11 +58,20 @@ const SHAPE_NAMES: Record<Shape, string> = {
   sharegpt: 'ShareGPT',
   alpaca: 'Alpaca',
   turns: '턴마다 칸',
+  preference: '선호 쌍',
+  pairwise: '두 응답 + 점수',
 }
 
 const route = useRoute()
 
+// 평가셋 켬 · 끔 (새 데이터셋만)
+const EVAL_OPTIONS: SegmentedOption<string>[] = [
+  { value: 'off', label: '학습 데이터' },
+  { value: 'on', label: '평가셋' },
+]
+
 const step = ref(1)
+const evalChoice = ref(route.query.eval === '1' ? 'on' : 'off')
 const datasetName = ref('')
 const repo = ref('')
 const source = ref<LoadedSource | null>(null)
@@ -87,8 +101,10 @@ const nameProblem = computed(() => {
 })
 const isMapped = computed(() => {
   const value = mapping.value
-  if (value.shape === 'alpaca') return Boolean(value.instruction && value.output)
+  if (value.shape === 'alpaca') return Boolean(value.instruction)
   if (value.shape === 'turns') return value.turns.length > 0 && value.turns.every((turn) => turn.user && turn.assistant)
+  if (value.shape === 'preference') return Boolean(value.chosen && value.rejected)
+  if (value.shape === 'pairwise') return Boolean(value.prompt && value.response1 && value.response2 && value.preference)
   return Boolean(value.messages)
 })
 const canStart = computed(
@@ -99,12 +115,15 @@ const rowCount = computed(() => (source.value ? sourceRowCount(source.value) : n
 // 4단계 요약에 보일 칸: [이름, 칸]
 const mappedColumns = computed<[string, string][]>(() => {
   const value = mapping.value
-  const rows: [string, string | null][] =
-    value.shape === 'alpaca'
-      ? [['지시 칸', value.instruction], ['입력 칸', value.input], ['응답 칸', value.output], ['시스템 칸', value.system]]
-      : value.shape === 'turns'
-        ? [['턴 칸', value.turns.map((turn) => `${turn.user} → ${turn.assistant}`).join(' · ')], ['시스템 칸', value.system]]
-        : [['대화 칸', value.messages]]
+  const byShape: Record<Shape, [string, string | null | undefined][]> = {
+    messages: [['대화 칸', value.messages], ['도구 칸', value.tools]],
+    sharegpt: [['대화 칸', value.messages], ['도구 칸', value.tools]],
+    alpaca: [['지시 칸', value.instruction], ['입력 칸', value.input], ['응답 칸', value.output], ['시스템 칸', value.system]],
+    turns: [['턴 칸', value.turns.map((turn) => `${turn.user} → ${turn.assistant}`).join(' · ')], ['시스템 칸', value.system]],
+    preference: [['지시 칸', value.prompt], ['고른 응답 칸', value.chosen], ['버린 응답 칸', value.rejected]],
+    pairwise: [['지시 칸', value.prompt], ['응답 1 칸', value.response1], ['응답 2 칸', value.response2], ['선호 점수 칸', value.preference]],
+  }
+  const rows = byShape[value.shape]
   return rows.filter((row): row is [string, string] => Boolean(row[1]))
 })
 
@@ -176,6 +195,12 @@ async function startImport(): Promise<ImportRead> {
 
 function onStarted(read: ImportRead): void {
   if (!isAdding.value) createdDataset.value = { id: read.dataset_id, name: trimmedName.value }
+  // 평가셋이면 표시한다(다른 데이터셋의 오염 대조가 들어간다). 가져오기가 끝날 때도 다시 대조한다.
+  if (!isAdding.value && evalChoice.value === 'on') {
+    updateSettings(read.dataset_id, { is_eval: true }).catch((error) =>
+      pushToast({ tone: 'fail', title: '평가셋 표시', detail: errorMessage(error), actions: [] }),
+    )
+  }
   // 새 데이터셋이 사이드바와 홈 목록에 바로 보이게 한다.
   void loadDatasets()
 }
@@ -226,13 +251,16 @@ function restart(): void {
       </section>
       <section v-else aria-label="데이터셋 이름">
         <label for="dataset-name" class="mb-1.5 block text-ui font-[550]">데이터셋 이름</label>
-        <Input
-          id="dataset-name"
-          v-model="datasetName"
-          placeholder="예: 상담 응답 SFT"
-          class="max-w-[420px]"
-          :maxlength="DATASET_NAME_MAX_LENGTH"
-        />
+        <div class="flex flex-wrap items-center gap-3">
+          <Input
+            id="dataset-name"
+            v-model="datasetName"
+            placeholder="예: 상담 응답 SFT"
+            class="max-w-[420px]"
+            :maxlength="DATASET_NAME_MAX_LENGTH"
+          />
+          <Segmented v-model="evalChoice" :options="EVAL_OPTIONS" label="쓰임" data-field="import-eval" />
+        </div>
       </section>
       <SourcePicker v-model:repo="repo" :picked="pickedSource" :loaded="source" @loaded="onLoaded" @next="step = 2" />
       <ExampleList
@@ -299,6 +327,10 @@ function restart(): void {
             <dd class="font-medium">{{ rowCount === null ? '—' : fmt(rowCount) }}</dd>
             <dt class="text-muted-foreground">모양</dt>
             <dd class="font-medium">{{ SHAPE_NAMES[mapping.shape] }}</dd>
+            <template v-if="!isAdding">
+              <dt class="text-muted-foreground">쓰임</dt>
+              <dd class="font-medium" data-import-eval>{{ evalChoice === 'on' ? '평가셋 · 오염 대조에 쓰임' : '학습 데이터' }}</dd>
+            </template>
             <template v-for="[name, column] in mappedColumns" :key="name">
               <dt class="text-muted-foreground">{{ name }}</dt>
               <dd class="truncate font-mono">{{ column }}</dd>
