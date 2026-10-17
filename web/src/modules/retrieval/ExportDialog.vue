@@ -7,7 +7,8 @@
     넣을 출처    원본 · 찾기 · 합성 · 도우미 · 사람 (판정 수)
     오답         표 칸 수 n · jsonl은 풀 전체 · 모자란 질의 · 평균
     교사 점수    기본 켬 · Jev 확률을 로짓으로(pos_scores · neg_scores) · Jev에 물을 수
-    출처 칸      학습 표를 고르면 보인다. 기본 켬 · source 칸(original · synthetic · human …). jsonl · BEIR에는 늘 들어간다
+    출처 · 묶음 칸  학습 표를 고르면 보인다. 기본 켬 · source 칸(original · synthetic · human …) · group 칸. jsonl · BEIR에는 늘 들어간다
+    평가 정답    BEIR을 고르면 보인다. 기본 켬 · 정답 문서의 중복 묶음(같은 본문 · 근접 중복)도 정답으로. 끄면 판정한 문서만
     미리 보기    고른 대로 만든 첫 줄 · 파일마다 수 · 잠김(남은 심각, [파일 만들기]가 꺼진다. 코퍼스만이면 켜짐) · 남은 주의
   [파일 만들기] → 고른 모양마다 작업("retrieval", "export") 하나. 교사 점수를 채울 학습 파일은 서버가 빠른 파일 뒤에 넣는다.
   만드는 동안 이 창에서 파일마다 대기 · 단계 n / m · 남은 시간을 보고(system/exports/ExportFiles), 끝나면 [내려받기](7일 보관).
@@ -60,6 +61,7 @@ const choice = reactive<ExportCreate>({
   negatives: 7,
   teacher_scores: true,
   source_column: true,
+  qrels_groups: true,
 })
 const preview = ref<ExportPreviewRead | null>(null)
 const previewError = ref<string | null>(null)
@@ -229,12 +231,22 @@ const LABEL = 'pt-1 text-ui font-semibold text-muted-foreground'
         </div>
 
         <div v-if="choice.formats.includes('train_table')" :class="ROW">
-          <span :class="LABEL">출처 칸</span>
-          <label class="flex cursor-pointer items-center gap-2 pt-1 text-ui">
+          <span :class="LABEL">출처 · 묶음 칸</span>
+          <label class="flex cursor-pointer flex-wrap items-center gap-2 pt-1 text-ui">
             <input v-model="choice.source_column" type="checkbox" class="size-4 accent-[var(--primary)]" data-field="source-column" />
             학습 표에 넣기
             <span class="rounded-[5px] bg-muted px-1.5 font-mono text-[11px] text-muted-foreground">source</span>
-            <span class="text-muted-foreground">· 원본 · 합성 · 사람</span>
+            <span class="rounded-[5px] bg-muted px-1.5 font-mono text-[11px] text-muted-foreground">group</span>
+            <span class="text-muted-foreground">· 원본 · 합성 · 사람 · 묶음째 나누기</span>
+          </label>
+        </div>
+
+        <div v-if="choice.formats.includes('beir')" :class="ROW">
+          <span :class="LABEL">평가 정답</span>
+          <label class="flex cursor-pointer items-center gap-2 pt-1 text-ui">
+            <input v-model="choice.qrels_groups" type="checkbox" class="size-4 accent-[var(--primary)]" data-field="qrels-groups" />
+            중복 묶음도 정답
+            <span class="text-muted-foreground">· 같은 본문 · 근접 중복</span>
           </label>
         </div>
 

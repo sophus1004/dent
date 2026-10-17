@@ -4,6 +4,8 @@
   그래도 걸리면 넣지 않는다(모자람으로 센다).
 - 비교 만들기: 주 응답이 있고 쌍이 없는 지시(problems.pair_targets)마다 LLM이 다른 응답을 쓰고, Jev가 두 응답이
   지시를 따르는지 따로 본 점수로 고른 응답을 정한다. 두 점수 차이가 작아도 쌍은 더하고 진단의 '작은 마진'이 알린다.
+  학습할 모델이 연결돼 있으면 그 모델이 대화에 그대로 답한 응답을 쓴다(as_policy, 학습할 모델이 낸 응답으로 만든 쌍이
+  다른 모델의 응답으로 만든 쌍보다 낫다는 연구를 따른다).
 여기서는 만들기만 하고 넣지 않는다. 넣기(결정 기록과 함께)는 부른 쪽이 conversations로 한다.
 LLM · Jev 요청은 MAKE_CONCURRENCY건씩 함께 보낸다(DB에 쓰는 일은 부른 쪽이 한 세션으로 차례로 한다).
 허락 전 시험은 앞 TRIAL_PROMPTS건으로 만들어 통과 수와 쓴 토큰을 보이고, 남은 수에 곱해 비용을 어림한다.
@@ -108,9 +110,11 @@ async def write_answers(
     connection: Connection,
     items: list[tuple[int, list[dict[str, Any]], str | None]],
     *,
+    as_policy: bool = False,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> list[Made]:
     """(번호, 맥락, 견줄 응답)마다 LLM이 응답을 쓴다. 견줄 응답이 있으면(비교 만들기) 그와 다른 응답을 쓴다.
+    as_policy면(학습할 모델) 지침 없이 맥락 그대로 보내 그 모델이 평소처럼 답한 응답을 받는다(견줄 응답은 보이지 않는다).
 
     MAKE_CONCURRENCY건씩 함께 보낸다. 크레딧 없음 · 한도 초과처럼 실행을 멈춰야 하는 LLM 실패는
     ExternalServiceError로 그대로 낸다(한 건만 실패한 빈 답은 그 건만 넣지 않는다).
@@ -119,7 +123,9 @@ async def write_answers(
 
     async def one(prompt_id: int, messages: list[dict[str, Any]], other: str | None) -> Made:
         async with gate:
-            return await _write_one(connection, prompt_id, messages, other, transport=transport)
+            return await _write_one(
+                connection, prompt_id, messages, other, as_policy=as_policy, transport=transport
+            )
 
     return list(await asyncio.gather(*(one(*item) for item in items)))
 
@@ -169,14 +175,20 @@ async def _write_one(
     messages: list[dict[str, Any]],
     other: str | None,
     *,
+    as_policy: bool,
     transport: httpx.AsyncBaseTransport | None,
 ) -> Made:
     """지시 하나에 응답을 쓴다(모양이 걸리면 한 번 더). 두 번 다 걸리면 text 없이 돌려준다."""
     tokens = 0
+    asked = (
+        answering.policy_messages(messages)
+        if as_policy
+        else answering.answer_messages(messages, other=other)
+    )
     for _attempt in range(answering.MAX_ATTEMPTS):
         reply = await llm.chat(
             connection,
-            messages=answering.answer_messages(messages, other=other),
+            messages=asked,
             tools=[],
             max_tokens=answering.ANSWER_MAX_TOKENS,
             transport=transport,

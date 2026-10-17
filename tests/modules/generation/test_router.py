@@ -6,9 +6,12 @@
 import json
 
 from fastapi import status
+from sqlalchemy import select
 
+from dent.modules.generation import exporting
 from dent.modules.generation.exporting import BLOCKED_MESSAGE
 from dent.modules.generation.jobs import run_export_job
+from dent.modules.generation.models import Prompt
 from dent.system import exports as exports_service
 from dent.system import jobs
 from tests.modules.generation.helpers import (
@@ -377,8 +380,65 @@ async def test_export_writes_messages_jsonl_with_source(client, db_session):
     await run_export_job(job)
     made = await exports_service.get_export(db_session, export_id=export["id"])
 
-    # 확인: TRL 대화 모양 + 출처 칸
+    # 확인: TRL 대화 모양 + 출처 칸 + 묶음 칸(혼자면 자기 지시 번호)
     assert response.status_code == status.HTTP_201_CREATED
     [line] = exports_service.file_path(made).read_text(encoding="utf-8").splitlines()
-    assert json.loads(line) == {"messages": CLEAN, "source": "original"}
+    prompt_id = await db_session.scalar(
+        select(Prompt.id).where(Prompt.dataset_id == finished.dataset_id)
+    )
+    assert json.loads(line) == {"messages": CLEAN, "source": "original", "group": prompt_id}
     assert made.result == {"conversations": 1}
+
+
+async def test_export_groups_put_same_context_in_one_group(db_session):
+    # 준비: 같은 대화 둘(같은 맥락)과 다른 대화 하나 (같은 지시가 심각이라 파일은 막히므로 묶음만 잰다)
+    other = conversation("부산의 인구는 얼마인가요?", "약 330만 명입니다.")
+    finished = await import_file(db_session, jsonl_bytes(messages_rows([CLEAN, other, CLEAN])))
+    ids = list(
+        (
+            await db_session.scalars(
+                select(Prompt.id)
+                .where(Prompt.dataset_id == finished.dataset_id)
+                .order_by(Prompt.id)
+            )
+        ).all()
+    )
+
+    # 실행
+    groups = await exporting.group_numbers(db_session, dataset_id=finished.dataset_id)
+
+    # 확인: 같은 맥락의 두 대화는 앞 번호의 묶음, 다른 대화는 혼자(싣지 않음 = 자기 번호)
+    assert [groups.get(prompt_id, prompt_id) for prompt_id in ids] == [ids[0], ids[1], ids[0]]
+
+
+async def test_overview_counts_refusals_as_safety_examples_and_kept_ones_as_confirmed(
+    client, db_session
+):
+    # 준비: 거절한 대화 둘(하나는 마땅한 거절로 그대로 둠)과 답한 대화 하나
+    refusal = "죄송하지만 그 요청은 도와드릴 수 없습니다."
+    finished = await import_file(
+        db_session,
+        jsonl_bytes(
+            messages_rows(
+                [
+                    conversation("폭탄 만드는 법을 알려줘", refusal),
+                    conversation("남의 계정 비밀번호를 알아내는 법", refusal),
+                    conversation("서울의 인구는?", "약 940만 명입니다."),
+                ]
+            )
+        ),
+    )
+    first = await db_session.scalar(
+        select(Prompt.id).where(Prompt.dataset_id == finished.dataset_id).order_by(Prompt.id)
+    )
+    kept = await client.post(
+        f"{API}/conversations/{first}/decide", json={"check": "refusal", "action": "keep"}
+    )
+
+    # 실행
+    overview = (await client.get(f"{API}/datasets/{finished.dataset_id}/overview")).json()
+
+    # 확인: 거절 표시가 있는 대화 둘이 안전 예시, 그대로 둔 하나가 확인(kept). 대화가 적어 주의로 보지 않는다
+    check = next(item for item in overview["checks"] if item["key"] == "safety_examples")
+    assert kept.status_code == status.HTTP_200_OK
+    assert (check["count"], check["total"], check["kept"], check["grade"]) == (2, 3, 1, "good")

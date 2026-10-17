@@ -25,6 +25,8 @@ export type CheckKey =
   | 'task_skew'
   | 'mismatch'
   | 'unsafe'
+  // 데이터셋의 모양: 해로운 요청에 거절로 답한 대화(안전 예시)
+  | 'safety_examples'
   // 평가셋과 대조하는 검사
   | 'contamination'
   // 3 선호: 쌍 하나가 단위
@@ -37,7 +39,8 @@ export type CheckKey =
 export type Grade = 'good' | 'warn' | 'bad'
 
 // 등급 매기는 방식: any 하나라도 심각 · warn_any 하나라도 주의 · rate 대화 수에 대한 비율 · share 가장 큰 무리의 몫
-export type GradeKind = 'any' | 'warn_any' | 'rate' | 'share'
+// none: 대화가 100건 이상인데 하나도 없으면 주의(있어야 좋은 것)
+export type GradeKind = 'any' | 'warn_any' | 'rate' | 'share' | 'none'
 
 // 고치는 쪽
 export type Who = 'rule' | 'jev' | 'llm' | 'human'
@@ -170,6 +173,17 @@ export interface WaitingRead {
   reason: string
 }
 
+// 오염 대조의 방법과 데이터셋 단위 겹침 (겹친 문항의 몫이 가장 큰 평가셋 기준)
+export interface ContaminationRead {
+  // ngram: 8-gram만 · embedding: + 임베딩 유사도 · llm: + 임베딩 후보의 LLM 판정
+  by: 'ngram' | 'embedding' | 'llm'
+  eval_items: number
+  overlapped: number
+  share: number
+  // 몫이 2%를 넘음: 겹친 지시만이 아니라 학습셋의 출처 전체를 의심
+  suspicious: boolean
+}
+
 export interface OverviewRead {
   dataset_id: number
   conversations: number
@@ -189,6 +203,8 @@ export interface OverviewRead {
   checks: CheckRead[]
   // 아직 재지 못한 뜻 검사 (종합 상태 · 지금 단계에 세지 않는다)
   waiting: WaitingRead[]
+  // 오염 대조의 방법과 겹침 (대조한 때만)
+  contamination: ContaminationRead | null
   // 흐름에서 지금 단계: 1 지시 · 2 응답 · 3 선호 · 4 내보내기
   now_stage: number
   computed_at: string

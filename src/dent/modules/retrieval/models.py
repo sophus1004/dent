@@ -121,6 +121,8 @@ class QuerySource(StrEnum):
     SYNTHETIC = "synthetic"
     # 사람이 쓰거나 고친 질의
     HUMAN = "human"
+    # 도우미가 LLM으로 고쳐 쓴 원본 · 사람 질의 (내보내는 파일에서 AI가 바꾼 것을 가를 수 있게)
+    HELPER = "helper"
 
 
 class JudgmentSource(StrEnum):
@@ -448,6 +450,9 @@ class DatasetSettings(Base):
 
     # 학습할 모델 (오답 찾기 · 기준 검색 · 길이에 쓴다). 비어 있으면 연결된 임베딩 모델.
     target_model: Mapped[str | None] = mapped_column(String(MODEL_NAME_MAX_LENGTH))
+
+    # 문서 · 청크의 토큰 수를 잰 토크나이저의 모델 이름. 비면 글자 수로 어림했다(토크나이저가 바뀌면 다시 잰다).
+    measured_model: Mapped[str | None] = mapped_column(String(MODEL_NAME_MAX_LENGTH))
 
     # 질의 · 문서 최대 토큰 (넘으면 잘린다)
     query_max_tokens: Mapped[int] = mapped_column(

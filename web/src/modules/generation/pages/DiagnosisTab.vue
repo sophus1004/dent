@@ -78,7 +78,11 @@ const loadError = ref<string | null>(null)
 let controller: AbortController | null = null
 
 const checks = computed(() =>
-  overview.value ? overview.value.checks.map((check) => toCheck(check, datasetId.value, overview.value!.conversations)) : [],
+  overview.value
+    ? overview.value.checks.map((check) =>
+        toCheck(check, datasetId.value, overview.value!.conversations, overview.value!.contamination),
+      )
+    : [],
 )
 
 // 3 선호가 있는지: 만들 데이터가 선호이거나 쌍이 있다

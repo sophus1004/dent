@@ -203,6 +203,20 @@ def unsafe_ids(dataset_id: int, analysis_id: int) -> Select[tuple[int]]:
     )
 
 
+def safety_example_ids(dataset_id: int) -> Select[tuple[int]]:
+    """안전 예시(후보)의 대화 번호들: 응답에 규칙의 거절 표시가 있는 휴지통 밖 대화.
+    거절 검사를 '그대로 두기'로 둔 것(마땅한 거절)이 확인된 안전 예시이고, 과잉 거절은 거절 검사가 빼게 한다."""
+    return (
+        select(Prompt.id)
+        .where(
+            Prompt.dataset_id == dataset_id,
+            IS_ACTIVE,
+            Prompt.marks.has_key(CheckKey.REFUSAL.value),
+        )
+        .order_by(Prompt.id)
+    )
+
+
 def no_answer_ids(dataset_id: int) -> Select[tuple[int]]:
     """주 응답이 없는 대화(지시만) 번호들."""
     return (

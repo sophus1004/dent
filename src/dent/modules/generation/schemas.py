@@ -9,6 +9,7 @@ from dent.modules.generation.models import (
     MODEL_NAME_MAX_LENGTH,
     Action,
     AnalysisStatus,
+    ContaminationBy,
     Goal,
     Shape,
 )
@@ -330,6 +331,21 @@ class WaitingRead(BaseModel):
     reason: str
 
 
+class ContaminationRead(BaseModel):
+    """오염 대조의 방법과 데이터셋 단위 겹침: 겹친 평가 문항의 몫이 가장 큰 평가셋 기준."""
+
+    # 대조에 쓴 방법: ngram(8-gram만) · embedding(+ 임베딩 유사도) · llm(+ 임베딩 후보의 LLM 판정)
+    by: ContaminationBy
+
+    # 그 평가셋의 휴지통 밖 문항 수와 이 데이터셋의 지시와 겹친 문항 수 · 몫
+    eval_items: int
+    overlapped: int
+    share: float
+
+    # 몫이 데이터셋 경계(2%)를 넘는지. 넘으면 겹친 지시만이 아니라 학습셋의 출처 전체를 의심한다.
+    suspicious: bool
+
+
 class OverviewRead(BaseModel):
     """데이터셋 진단: 대화 수, 검사들, 흐름에서 지금 단계."""
 
@@ -366,6 +382,9 @@ class OverviewRead(BaseModel):
 
     # 아직 재지 못한 뜻 검사들 (뜻 분석 전 · Jev 없음). 종합 상태와 지금 단계에 세지 않는다.
     waiting: list[WaitingRead]
+
+    # 오염 대조의 방법과 데이터셋 단위 겹침 (대조한 때만, 평가셋 자신 · 평가셋 없음 · 대조 전이면 비어 있다)
+    contamination: ContaminationRead | None = None
 
     # 흐름에서 지금 단계: 1 지시 · 2 응답 · 3 선호 · 4 내보내기(남은 문제 없음)
     now_stage: int

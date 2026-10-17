@@ -36,6 +36,7 @@ CHECK_NAMES: dict[CheckKey, str] = {
     CheckKey.NEAR_DUPLICATE: "근접 중복",
     CheckKey.PII: "개인정보",
     CheckKey.TASK_SKEW: "과제 쏠림",
+    CheckKey.SAFETY_EXAMPLES: "안전 예시",
     CheckKey.EMPTY_ANSWER: "빈 응답",
     CheckKey.TRUNCATED: "잘린 응답",
     CheckKey.CODE_TRANSLATED: "번역된 코드",
@@ -107,9 +108,12 @@ FIX_SPECS: dict[str, FixSpec] = {
     CheckKey.LONG: FixSpec(LEFT_DIRECT, "drop", "빼기 · 규칙 · 내용을 잃음"),
     PAIRS_KEY: FixSpec(LEFT_AI, "compare", "LLM 응답 하나 더 · Jev가 고르기"),
     CheckKey.SAME_PAIR: FixSpec(LEFT_AI, "drop", "쌍 빼기 · 규칙"),
-    CheckKey.JUDGE_REVERSED: FixSpec(LEFT_AI, "judge", "LLM 판정 · 뒤집기 · 쌍 빼기"),
+    CheckKey.JUDGE_REVERSED: FixSpec(
+        LEFT_AI, "judge", "LLM이 순서를 바꿔 두 번 견줌 · 뒤집기 · 쌍 빼기"
+    ),
     CheckKey.SMALL_MARGIN: FixSpec(LEFT_DIRECT, "drop", "쌍 빼기 · 규칙 · 신호가 약함"),
     CheckKey.TASK_SKEW: FixSpec(LEFT_BLOCKED, "none", "모자란 과제의 데이터 더하기"),
+    CheckKey.SAFETY_EXAMPLES: FixSpec(LEFT_BLOCKED, "none", "해로운 요청에 거절한 예 더하기"),
     CheckKey.LENGTH_BIAS: FixSpec(LEFT_BLOCKED, "none", "고른 응답이 더 짧은 쌍 더하기"),
 }
 
@@ -124,9 +128,11 @@ def ordered(keys: list[str]) -> list[str]:
 
 
 def check_value(check: CheckRead) -> str:
-    """검사 값 글 (보고 · 남은 것): 과제 쏠림은 몫, 나머지는 건수."""
+    """검사 값 글 (보고 · 남은 것): 과제 쏠림은 몫, 안전 예시는 확인 · 거절 수, 나머지는 건수."""
     if check.kind == "share":
         return f"{round(check.rate * 100)}%"
+    if check.kind == "none":
+        return f"확인 {check.kept:,} · 거절 {check.count:,}"
     return f"{check.count:,}건"
 
 
@@ -138,10 +144,17 @@ async def left_items(db: AsyncSession, *, dataset_id: int) -> list[LeftItem]:
     for key in FIX_ORDER:
         if key == PAIRS_KEY:
             if await wants_pairs(db, overview):
-                items.append(_pairs_item(overview.unpaired))
+                by_target = (
+                    await connections.get_connection(db, role=ConnectionRole.TARGET) is not None
+                )
+                items.append(_pairs_item(overview.unpaired, by_target=by_target))
             continue
         check = by_key.get(CheckKey(key))
-        if check is None or check.grade == "good" or check.count == 0:
+        # none 검사(안전 예시)는 0건이 문제다
+        is_clear = (
+            check is None or check.grade == "good" or (check.count == 0 and check.kind != "none")
+        )
+        if is_clear:
             continue
         items.append(_item(check, FIX_SPECS[key]))
     return items
@@ -154,7 +167,11 @@ async def wants_pairs(db: AsyncSession, overview: OverviewRead) -> bool:
     return await connections.get_connection(db, role=ConnectionRole.JEV) is not None
 
 
-def _pairs_item(count: int) -> LeftItem:
+# 학습할 모델이 연결돼 있을 때 비교 만들기의 하는 일 (그 모델이 응답을 쓴다)
+PAIRS_BY_TARGET_TEXT = "학습할 모델 응답 하나 더 · Jev가 고르기"
+
+
+def _pairs_item(count: int, *, by_target: bool) -> LeftItem:
     spec = FIX_SPECS[PAIRS_KEY]
     return LeftItem(
         key=PAIRS_KEY,
@@ -164,7 +181,7 @@ def _pairs_item(count: int) -> LeftItem:
         sub=f"한 번에 {MAX_MAKES_PER_FIX}건" if count > MAX_MAKES_PER_FIX else "",
         grade="warn",
         group=spec.group,
-        how=spec.text,
+        how=PAIRS_BY_TARGET_TEXT if by_target else spec.text,
         tokens=min(count, MAX_MAKES_PER_FIX) * making.TOKENS_EACH_ESTIMATE,
         action="",
         view_problem="",

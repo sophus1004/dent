@@ -35,7 +35,7 @@ Transport = Annotated[httpx.AsyncBaseTransport | None, Depends(get_http_transpor
 
 @router.get("")
 async def list_connections(db: Db, transport: Transport) -> list[ConnectionRead]:
-    """세 역할(임베딩 · Jev · LLM)의 연결과 마지막 확인 결과. 저장하지 않은 역할은 주소가 null."""
+    """역할마다(임베딩 · Jev · LLM · 학습할 모델) 연결과 마지막 확인 결과. 저장하지 않은 역할은 주소가 null."""
     statuses = await status_service.list_connection_statuses(db, transport=transport)
     return [_connection_read(item.role, item.connection, item.check) for item in statuses]
 

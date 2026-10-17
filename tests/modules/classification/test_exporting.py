@@ -1,5 +1,5 @@
 """분류 내보내기 테스트: 미리 보기(첫 줄 · 파일마다 수 · 출처별 수 · 남은 검사) · 학습 jsonl · 학습 표 · 라벨 목록이
-같은 번호를 쓰는지 · 출처 고르기 · 출처 칸 · 심각이 남아도 막지 않음 · 422 · 404.
+같은 번호를 쓰는지 · 출처 고르기 · 출처 칸 · 묶음 칸(같은 글 · 근접 중복) · 심각이 남아도 막지 않음 · 422 · 404.
 분할이 없어 학습에 쓰는 문장(학습 제외 · 휴지통 뺌)을 모두 넣는다."""
 
 import csv
@@ -9,6 +9,7 @@ from fastapi import status
 
 from dent.modules.classification import service as classification_service
 from dent.modules.classification.jobs import run_export_job
+from dent.modules.classification.models import Map, MapStatus, NearDuplicate
 from dent.system import exports as exports_service
 from dent.system import jobs
 from tests.modules.classification.helpers import Row
@@ -67,6 +68,8 @@ async def test_preview_export_shows_line_counts_and_left_checks(client, db_sessi
         "label": 0,
         "label_text": "환불",
         "source": "original",
+        "label_source": "original",
+        "group": made.records[0].id,
     }
     assert [(file["format"], file["records"], file["labels"]) for file in body["files"]] == [
         ("train_jsonl", 6, 2),
@@ -104,9 +107,26 @@ async def test_export_writes_jsonl_table_and_labels_with_same_numbers(
         ("같은 문장인데 라벨이 달라요", 0, "original"),
         ("같은 문장인데 라벨이 달라요", 1, "original"),
     ]
+    # 같은 문장은 한 묶음(앞 문장 번호), 나머지는 혼자(자기 번호)다.
+    same = made.records[6].id
+    assert [line["group"] for line in lines] == [
+        made.records[0].id,
+        made.records[1].id,
+        made.records[2].id,
+        made.records[3].id,
+        same,
+        same,
+    ]
     table = list(csv.reader(files["train_table"].splitlines()))
-    assert table[0] == ["text", "label", "label_text", "source"]
-    assert table[4] == ["택배가 아직 안 왔어요", "1", "배송", "synthetic"]
+    assert table[0] == ["text", "label", "label_text", "source", "label_source", "group"]
+    assert table[4] == [
+        "택배가 아직 안 왔어요",
+        "1",
+        "배송",
+        "synthetic",
+        "original",
+        str(made.records[3].id),
+    ]
     assert len(table) == len(lines) + 1
     assert json.loads(files["labels"]) == {
         "id2label": {"0": "환불", "1": "배송"},
@@ -165,3 +185,34 @@ async def test_preview_export_returns_404_when_dataset_is_missing(client):
 
     # 확인
     assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+async def test_export_groups_near_duplicates_of_latest_map(client, db_session, make_dataset):
+    # 준비: 다 만든 뜻 분석이 두 문장을 근접 중복으로 찾았다(이어진 쌍: 0-1, 1-2).
+    made = await _make(db_session, make_dataset)
+    analysis = Map(dataset_id=made.dataset.id, status=MapStatus.DONE)
+    db_session.add(analysis)
+    await db_session.flush()
+    hashes = [made.records[index].text_hash for index in (0, 1, 2)]
+    db_session.add_all(
+        [
+            NearDuplicate(
+                map_id=analysis.id, text_hash_a=hashes[0], text_hash_b=hashes[1], similarity=0.95
+            ),
+            NearDuplicate(
+                map_id=analysis.id, text_hash_a=hashes[1], text_hash_b=hashes[2], similarity=0.93
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    # 실행
+    files = await _run_exports(client, db_session, made.dataset.id, {"formats": ["train_jsonl"]})
+
+    # 확인: 이어진 세 문장이 가장 작은 번호의 묶음이다
+    groups = {
+        line["text"]: line["group"] for line in map(json.loads, files["train_jsonl"].splitlines())
+    }
+    first = made.records[0].id
+    assert [groups[made.records[index].text] for index in (0, 1, 2)] == [first, first, first]
+    assert groups[made.records[3].text] == made.records[3].id

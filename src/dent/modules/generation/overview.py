@@ -5,6 +5,7 @@
 - 응답 없음: 주 응답이 없는 대화(지시만). 응답이 없는 대화가 있을 때만 줄로 보인다(할 일: 응답 만들기).
 - 도구 호출 형식: 도구 대화가 있을 때만 줄로 보인다.
 - 오염: 평가셋을 표시했을 때만 잰다(없으면 '평가셋 없음', 평가셋이 바뀌어 다시 대조할 때까지 '대조 전'으로 기다림).
+  대조에 쓴 방법과 겹친 평가 문항의 몫(데이터셋 단위, 2%를 넘으면 출처 의심)을 함께 싣는다.
 - 뜻 검사(근접 중복 · 과제 쏠림 · 지시 불일치 · 안전)는 다 만든 뜻 분석으로 센다. 분석이 없거나 Jev가 묻지 못했으면 기다림.
   안전은 Jev가 판정한 표본(앞 몇천 건)으로 세고 분모도 그 수다.
 - 3 선호(쌍 단위)는 만들 데이터가 선호이거나 쌍이 있을 때만: 같은 쌍 · 동점은 쌍 표시로, 판정 반대 · 작은 마진은
@@ -22,13 +23,19 @@ from sqlalchemy.orm import aliased
 
 from dent.modules.generation import contamination, judging, problems, rules
 from dent.modules.generation import service as generation_service
-from dent.modules.generation.models import Goal, Pair, Prompt, Response, Role
+from dent.modules.generation.models import ContaminationBy, Goal, Pair, Prompt, Response, Role
 from dent.modules.generation.rules import CHECKS, CheckKey
-from dent.modules.generation.schemas import CheckRead, OverviewRead, WaitingRead
+from dent.modules.generation.schemas import (
+    CheckRead,
+    ContaminationRead,
+    OverviewRead,
+    WaitingRead,
+)
 from dent.modules.generation.service import HAS_MAIN_ANSWER, IS_ACTIVE, IS_TRASHED, has_open
+from dent.system.contamination import DATASET_SHARE_LIMIT
 
 # 해시 · 따로 된 조건으로 세는 검사 (open_checks 표시가 아니라)
-NOT_MARK_CHECKS = {CheckKey.DUPLICATE, CheckKey.NO_ANSWER}
+NOT_MARK_CHECKS = {CheckKey.DUPLICATE, CheckKey.NO_ANSWER, CheckKey.SAFETY_EXAMPLES}
 
 # 도구 대화가 있을 때만 보이는 검사
 TOOL_CHECKS = {CheckKey.TOOL_CALL}
@@ -77,12 +84,18 @@ async def get_overview(db: AsyncSession, *, dataset_id: int) -> OverviewRead:
     counts[CheckKey.DUPLICATE] = await _count(db, problems.duplicate_extras(dataset_id))
     if unanswered:
         counts[CheckKey.NO_ANSWER] = await _count(db, problems.no_answer_ids(dataset_id))
+    # 안전 예시는 응답이 있는 데이터에서만 센다(지시만이면 거절할 응답이 없다).
+    if int(active) > int(unanswered):
+        counts[CheckKey.SAFETY_EXAMPLES] = await _count(db, problems.safety_example_ids(dataset_id))
     totals = {key: int(active) for key in CHECKS}
     sampled: set[CheckKey] = set()
     waiting: list[WaitingRead] = []
 
+    contaminated: ContaminationRead | None = None
     if not settings.is_eval:
-        await _contamination(db, dataset_id, counts=counts, waiting=waiting)
+        contaminated = await _contamination(
+            db, dataset_id, by=settings.contamination_by, counts=counts, waiting=waiting
+        )
 
     analysis = await problems.done_analysis(db, dataset_id=dataset_id)
     semantic_keys = [key for key in rules.SEMANTIC_CHECKS if CHECKS[key].unit == "conversation"]
@@ -139,7 +152,8 @@ async def get_overview(db: AsyncSession, *, dataset_id: int) -> OverviewRead:
             count=int(counts[key]),
             total=totals[key],
             sampled=key in sampled,
-            kept=kept.get(key.value, 0),
+            # 안전 예시의 '그대로 둠'은 거절 검사를 마땅한 거절로 그대로 둔 수(확인된 안전 예시)다.
+            kept=kept.get((CheckKey.REFUSAL if key == CheckKey.SAFETY_EXAMPLES else key).value, 0),
         )
         for key in CHECKS
         if key in counts
@@ -158,6 +172,7 @@ async def get_overview(db: AsyncSession, *, dataset_id: int) -> OverviewRead:
         turns=await _turn_counts(db, dataset_id=dataset_id),
         checks=checks,
         waiting=waiting,
+        contamination=contaminated,
         now_stage=_now_stage(
             checks,
             has_pairs=shows_pairs,
@@ -174,16 +189,35 @@ async def blocking_checks(db: AsyncSession, *, dataset_id: int) -> list[CheckRea
 
 
 async def _contamination(
-    db: AsyncSession, dataset_id: int, *, counts: dict[CheckKey, int], waiting: list[WaitingRead]
-) -> None:
-    """오염: 평가셋이 없으면 기다림(평가셋 없음), 평가셋이 바뀐 뒤 아직 대조하지 않았으면 기다림(대조 전)."""
+    db: AsyncSession,
+    dataset_id: int,
+    *,
+    by: str | None,
+    counts: dict[CheckKey, int],
+    waiting: list[WaitingRead],
+) -> ContaminationRead | None:
+    """오염: 평가셋이 없으면 기다림(평가셋 없음), 평가셋이 바뀐 뒤 아직 대조하지 않았으면 기다림(대조 전).
+
+    대조했으면 수를 세고 방법 · 데이터셋 단위 겹침을 돌려준다.
+    """
     state = await contamination.state(db, dataset_id=dataset_id)
     if state == contamination.STATE_NO_EVAL:
         waiting.append(_waiting(CheckKey.CONTAMINATION, NO_EVAL_REASON))
-    elif state == contamination.STATE_STALE:
+        return None
+    if state == contamination.STATE_STALE:
         waiting.append(_waiting(CheckKey.CONTAMINATION, STALE_EVAL_REASON))
-    else:
-        counts[CheckKey.CONTAMINATION] = await _count(db, problems.contamination_ids(dataset_id))
+        return None
+    counts[CheckKey.CONTAMINATION] = await _count(db, problems.contamination_ids(dataset_id))
+    eval_items, overlapped = await contamination.overlap(db, dataset_id=dataset_id)
+    share = overlapped / eval_items if eval_items else 0.0
+    return ContaminationRead(
+        # 방법을 적기 전에 대조한 것은 8-gram만 했다.
+        by=ContaminationBy(by or ContaminationBy.NGRAM),
+        eval_items=eval_items,
+        overlapped=overlapped,
+        share=share,
+        suspicious=share > DATASET_SHARE_LIMIT,
+    )
 
 
 async def _pair_checks(

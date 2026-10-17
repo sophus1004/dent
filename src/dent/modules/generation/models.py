@@ -9,7 +9,7 @@
   하나다. 응답이 없는 지시(지시만)도 있다(응답 만들기로 채운다). 생각 과정(reasoning)은 따로 둔다(다음 판).
 - 선호 쌍: 지시 하나에 고른 응답 · 버린 응답 한 쌍(DPO · KTO). Jev가 응답마다 본 판정을 함께 둔다.
 - 데이터셋 설정: 만들 데이터(SFT · 선호) · 평가셋 표시(오염 대조) · 학습할 모델의 토크나이저와 최대 길이.
-- 오염: 평가셋과 겹치는 지시와 겹친 몫.
+- 오염: 평가셋과 겹치는 지시와 찾은 방법(8-gram 겹친 몫 · 임베딩 유사도와 LLM 판정).
 - 결정 기록: 검토에서 한 결정(빼기 · 그대로 두기 · 가리기 · 자르기 · 다시 쓰기)의 전 · 후. 되돌리기에 쓴다.
 - 뜻 분석: 지시 · 응답을 임베딩해 만든 한 번의 분석(지도 점 · 근접 중복 쌍 · Jev 판정). 데이터셋마다 다 만든 것은 하나다.
 train · valid · test는 나누지 않는다(한 덩어리).
@@ -145,6 +145,28 @@ class AnalysisStatus(StrEnum):
 
 # 만드는 중으로 보는 뜻 분석 상태. 데이터셋마다 한 번에 하나만 돈다.
 ANALYSIS_BUILDING_STATUSES = (AnalysisStatus.QUEUED, AnalysisStatus.RUNNING)
+
+
+class ContaminationMethod(StrEnum):
+    """오염 한 건을 찾은 방법."""
+
+    # 평가 문항과 낱말 8-gram으로 겹침
+    NGRAM = "ngram"
+    # 임베딩이 가까운 평가 문항을 LLM이 같은 문제(바꿔 씀 · 옮김)로 판정
+    PARAPHRASE = "paraphrase"
+    # LLM 없이 임베딩 유사도만으로 (거의 같은 글)
+    SIMILAR = "similar"
+
+
+class ContaminationBy(StrEnum):
+    """오염 대조 한 번에 쓴 방법들 (진단에 보인다)."""
+
+    # 8-gram만 (임베딩이 없거나 실패)
+    NGRAM = "ngram"
+    # 8-gram + 임베딩 유사도 (LLM이 없거나 실패)
+    EMBEDDING = "embedding"
+    # 8-gram + 임베딩 후보의 LLM 판정
+    LLM = "llm"
 
 
 class Prompt(Base):
@@ -546,6 +568,9 @@ class DatasetSettings(Base):
     contamination_signature: Mapped[str | None] = mapped_column(Text)
     contamination_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # 마지막 대조에 쓴 방법: ngram · embedding · llm (ContaminationBy). 대조 전이면 비어 있다.
+    contamination_by: Mapped[str | None] = mapped_column(String(ENUM_MAX_LENGTH))
+
     # 고친 시각
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -553,9 +578,10 @@ class DatasetSettings(Base):
 
 
 class Contamination(Base):
-    """평가셋과 겹치는 지시 한 건: 가장 많이 겹친 평가 문항과 그 문항이 겹친 몫(8-gram)."""
+    """평가셋과 겹치는 지시 한 건: 겹친 평가 문항과 찾은 방법(8-gram 겹친 몫 · 임베딩 유사도)."""
 
     __tablename__ = "generation_contaminations"
+    __table_args__ = (CheckConstraint(check_in("method", ContaminationMethod), name="method"),)
 
     # 지시 번호 (학습 데이터셋의). 지시를 지우면 함께 지운다.
     prompt_id: Mapped[int] = mapped_column(
@@ -572,5 +598,13 @@ class Contamination(Base):
         ForeignKey("generation_prompts.id", ondelete="CASCADE"), index=True
     )
 
-    # 평가 문항의 낱말 가운데 학습 지시와 같은 8-gram에 든 몫 (0~1)
-    coverage: Mapped[float] = mapped_column(REAL)
+    # 찾은 방법: ngram · paraphrase · similar (ContaminationMethod)
+    method: Mapped[str] = mapped_column(
+        String(ENUM_MAX_LENGTH), server_default=ContaminationMethod.NGRAM.value
+    )
+
+    # 평가 문항의 낱말 가운데 학습 지시와 같은 8-gram에 든 몫 (0~1). 뜻으로 찾았으면 비어 있다.
+    coverage: Mapped[float | None] = mapped_column(REAL)
+
+    # 지시와 평가 문항의 임베딩 코사인 유사도. 8-gram으로 찾았으면 비어 있다.
+    similarity: Mapped[float | None] = mapped_column(REAL)

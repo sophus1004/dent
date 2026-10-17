@@ -3,12 +3,13 @@
     임베딩   주소 · 모델(필수) · [연결 확인] [저장] [연결 끊기]
     Jev      주소 · 모델(비우면 자동) · [연결 확인] [저장] [연결 끊기]
     LLM      공급자 · 주소 · API 키 · 모델(목록에서 고르기) · [연결 확인] [저장] [연결 끊기]. 키는 가려서 받고 저장된 키는 힌트만.
+    학습할 모델  LLM과 같은 칸(선택). 연결하면 생성의 비교 만들기가 이 모델이 대화에 그대로 답한 응답으로 쌍을 만든다.
   열 때마다 GET /api/v1/connections로 저장된 값과 마지막 확인 결과를 채운다.
   저장 · 끊기를 하면 바로 적용되고(다시 실행하지 않는다), 상태(/readyz)를 다시 물어 홈 · 사이드바도 바로 바뀐다.
   App.vue에 하나만 두고 openConnectionSettings()로 연다.
 -->
 <script setup lang="ts">
-import { Bot, Gavel, Plug, TriangleAlert, Waypoints } from '@lucide/vue'
+import { Bot, Gavel, GraduationCap, Plug, TriangleAlert, Waypoints } from '@lucide/vue'
 import { ref, watch } from 'vue'
 
 import { listConnections } from '@/system/api'
@@ -56,7 +57,7 @@ function saved(role: ConnectionRole): ConnectionRead | null {
         <Plug class="size-4 text-muted-foreground" />
         <DialogTitle class="text-title font-semibold">연결 설정</DialogTitle>
         <span :class="TAG_CLASS">저장 즉시 적용</span>
-        <DialogDescription class="sr-only">외부 모델 서버: 임베딩 · Jev · LLM</DialogDescription>
+        <DialogDescription class="sr-only">외부 모델 서버: 임베딩 · Jev · LLM · 학습할 모델</DialogDescription>
       </DialogHeader>
 
       <div v-if="loadError" class="flex items-center gap-2 border-b px-5 py-3 text-ui">
@@ -97,6 +98,18 @@ function saved(role: ConnectionRole): ConnectionRead | null {
           model-placeholder="비우고 [연결 확인] → 목록"
           :model-required="false"
           :initial="saved('llm')"
+          :loading="!connections && !loadError"
+          llm
+          @changed="refreshReadiness"
+        />
+        <ConnectionRow
+          role="target"
+          :icon="GraduationCap"
+          name="학습할 모델"
+          address-placeholder="http://127.0.0.1:8000/v1"
+          model-placeholder="선택 · 비우고 [연결 확인] → 목록"
+          :model-required="false"
+          :initial="saved('target')"
           :loading="!connections && !loadError"
           llm
           @changed="refreshReadiness"

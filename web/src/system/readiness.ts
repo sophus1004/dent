@@ -18,8 +18,8 @@ export interface CheckRead {
 
 // 홈의 모델 칸 한 줄. src/dent/api/health.py의 ModelInfoRead와 같다.
 export interface ModelInfoRead {
-  // 역할
-  role: 'embedding' | 'jev' | 'llm'
+  // 역할 (target: 학습할 모델)
+  role: 'embedding' | 'jev' | 'llm' | 'target'
   // 내장 모델 이름(bge-m3 · laya). 내장이 아니면 null
   embedded: string | null
   // 연결 주소. 미연결이면 null
@@ -49,7 +49,7 @@ export interface ReadinessRead {
   // 참고로만 보는 상태: worker, embedding, jev, llm.
   // 연결은 '연결됨 · 1024차원 · 42ms' · '실패 · 연결 거부' · '미연결'처럼 낱말로 시작한다.
   info: Record<string, CheckRead>
-  // 홈의 모델 칸: 임베딩 · Jev · LLM 순서로 한 줄씩
+  // 홈의 모델 칸: 임베딩 · Jev · LLM · 학습할 모델 순서로 한 줄씩
   models: ModelInfoRead[]
 }
 
@@ -98,8 +98,8 @@ function scheduleWhilePreparing(): void {
   if (isPreparing) preparingTimer = setTimeout(() => void refreshReadiness(), PREPARING_POLL_INTERVAL_MS)
 }
 
-/** 임베딩 · Jev · LLM이 연결돼 쓸 수 있는지. 진단 탭 · 도우미 창이 쓴다. */
-export function isConnected(role: 'embedding' | 'jev' | 'llm'): boolean {
+/** 임베딩 · Jev · LLM · 학습할 모델이 연결돼 쓸 수 있는지. 진단 탭 · 도우미 창이 쓴다. */
+export function isConnected(role: 'embedding' | 'jev' | 'llm' | 'target'): boolean {
   return readiness.value?.info[role]?.ok === true
 }
 

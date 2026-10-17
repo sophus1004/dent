@@ -67,8 +67,16 @@ GENERATE_DROPPED_SHOWN = 10
 # LLM에 묻는 횟수의 상한 = 필요한 묶음 수 × 이 배수 + 1 (거르기로 버리는 몫을 채운다. 실행 토큰 상한이 따로 막는다)
 GENERATE_ROUNDS_FACTOR = 2
 
-# 새 문장 비용 어림: 라벨마다 지시 · 보기(토큰)와 문장 하나(토큰)
-GENERATE_PROMPT_TOKENS = 600
+# 새 문장의 세부 주제: 라벨마다 먼저 LLM이 서로 다른 세부 주제를 고르고, 묶음마다 몇 개씩 나눠 맡긴다.
+# 라벨 이름과 보기만 주면 같은 대상을 표현만 바꿔 되풀이했다(지리 100개에 같은 주제 10여 건, 코사인 0.88~0.917이라
+# 근접 거르기 0.92를 빠져나감). 세부 주제 같은 속성을 바꿔 가며 만들게 하면 다양성이 오르고 쏠림이 준다(AttrPrompt).
+# 세부 주제 하나에 맡기는 문장 수와 세부 주제 수의 상한
+SENTENCES_PER_SUBTOPIC = 4
+MAX_SUBTOPICS = 30
+SUBTOPIC_MAX_TOKENS = 1_500
+
+# 새 문장 비용 어림: 라벨마다 지시 · 보기 · 세부 주제 고르기(토큰)와 문장 하나(토큰)
+GENERATE_PROMPT_TOKENS = 1_000
 GENERATE_TOKENS_PER_TEXT = 40
 
 LABEL_PROMPT = (
@@ -374,6 +382,9 @@ async def generate_label(
         except ExternalServiceError as error:
             await agent.notice(f"근접 거르기 없음 · {error.message}", tone="warn")
             near = None
+    subtopics = await _ask_subtopics(agent, name=name, count=count, samples=samples, others=others)
+    # 다음 묶음이 맡을 세부 주제의 자리 (다 쓰면 처음부터 다시 돈다)
+    cursor = 0
     questions = semantic_checks.jev_questions(labels)
     kept: list[str] = []
     # 더한 새 문장의 벡터 (뒤에 만든 문장이 앞서 더한 문장과 근접한지 본다)
@@ -389,6 +400,11 @@ async def generate_label(
     while len(kept) < count and attempts < max_attempts:
         attempts += 1
         wanted = min(GENERATE_BATCH, count - len(kept))
+        topics: list[str] = []
+        if subtopics:
+            shared = min(math.ceil(wanted / SENTENCES_PER_SUBTOPIC), len(subtopics))
+            topics = [subtopics[(cursor + index) % len(subtopics)] for index in range(shared)]
+            cursor += shared
         texts = await _ask_texts(
             agent,
             name=name,
@@ -397,6 +413,7 @@ async def generate_label(
             others=others,
             made=kept[-GENERATE_MADE_SHOWN:],
             dropped=dropped[-GENERATE_DROPPED_SHOWN:],
+            topics=topics,
         )
         hashes = [make_text_hash(text) for text in texts]
         existing = await helper_tools.existing_hashes(
@@ -490,6 +507,35 @@ async def generate_label(
     return added, near_rejected
 
 
+async def _ask_subtopics(
+    agent: Agent, *, name: str, count: int, samples: list[str], others: list[str]
+) -> list[str]:
+    """라벨의 새 문장이 나눠 다룰 세부 주제들(서로 겹치지 않게). 읽을 수 없으면 빈 목록(세부 주제 없이 만든다)."""
+    wanted = min(math.ceil(count / SENTENCES_PER_SUBTOPIC), MAX_SUBTOPICS)
+    system = (
+        "너는 분류 학습 데이터의 새 문장이 다룰 세부 주제를 고른다. 라벨 안에서 서로 겹치지 않는 세부 주제를 "
+        "고를 수만큼 정확히 고른다. 넓은 갈래보다 좁고 구체적인 주제로, 라벨 전체에 고르게 퍼지게(보기에 없는 쪽도) "
+        "고르고, 다른 라벨로 읽힐 주제는 고르지 않는다. 세부 주제는 몇 낱말로 쓴다. "
+        '답은 JSON 하나만: {"subtopics": ["…"]}'
+    )
+    user = (
+        f"라벨: {name}\n고를 수: {wanted}\n보기:\n"
+        + "\n".join(f"- {text}" for text in samples)
+        + "\n다른 라벨 보기:\n"
+        + "\n".join(f"- {text}" for text in others)
+    )
+    reply = await agent.chat(
+        [ChatMessage(role="system", content=system), ChatMessage(role="user", content=user)],
+        [],
+        max_tokens=SUBTOPIC_MAX_TOKENS,
+    )
+    found = _parse_list(reply.content, field="subtopics")
+    topics = list(dict.fromkeys(text for text in found if text))[:wanted]
+    if topics:
+        await agent.say(f"{name} 세부 주제 {len(topics)}개: {' · '.join(topics[:CARD_ROWS])}")
+    return topics
+
+
 async def _ask_texts(
     agent: Agent,
     *,
@@ -499,12 +545,17 @@ async def _ask_texts(
     others: list[str],
     made: list[str],
     dropped: list[str],
+    topics: list[str],
 ) -> list[str]:
-    """LLM에 새 문장을 JSON으로 받는다. 모양이 틀리거나 너무 짧은 · 긴 문장은 버린다. LLM 카드를 적는다."""
+    """LLM에 새 문장을 JSON으로 받는다. 모양이 틀리거나 너무 짧은 · 긴 문장은 버린다. LLM 카드를 적는다.
+
+    세부 주제(topics)를 주면 문장마다 그 가운데 하나를 다루게 고르게 나눈다.
+    """
     system = (
         "너는 분류 학습 데이터의 새 문장을 만든다. 보기 문장과 모양 · 길이 · 말투를 맞추고, "
         "보기와 같거나 거의 같은 문장은 쓰지 않는다. 다른 라벨로 읽힐 문장은 쓰지 않는다. "
         "문장끼리도 대상과 사실이 겹치지 않게 서로 다른 것을 쓰고, 이미 만든 문장의 대상은 다시 쓰지 않는다. "
+        "세부 주제가 주어지면 문장마다 그 가운데 하나를 다루고 세부 주제마다 고르게 나눈다. "
         '답은 JSON 하나만: {"texts": ["…"]}'
     )
     user = (
@@ -513,6 +564,8 @@ async def _ask_texts(
         + "\n다른 라벨 보기(이렇게 읽히면 안 된다):\n"
         + "\n".join(f"- {text}" for text in others)
     )
+    if topics:
+        user += "\n세부 주제(고르게 나눈다):\n" + "\n".join(f"- {topic}" for topic in topics)
     if made:
         user += "\n이미 만든 문장(같은 대상 · 같은 사실은 다시 쓰지 않는다):\n" + "\n".join(
             f"- {text}" for text in made
@@ -545,7 +598,18 @@ async def _ask_texts(
 
 
 def _parse_texts(content: str) -> list[str]:
-    """LLM 답에서 {"texts": [...]}를 읽는다. 앞뒤 글이나 코드 울타리가 있어도 첫 { … 마지막 }을 읽는다."""
+    """LLM 답에서 {"texts": [...]}를 읽어 길이가 맞는 문장만 남긴다."""
+    cleaned = _parse_list(content, field="texts")
+    return [
+        text
+        for text in cleaned
+        if records_service.SHORT_TEXT_LENGTH <= len(text) <= GENERATED_TEXT_MAX_LENGTH
+    ]
+
+
+def _parse_list(content: str, *, field: str) -> list[str]:
+    """LLM 답에서 {field: [...]}의 글들(앞뒤 공백 뺌)을 읽는다. 앞뒤 글이나 코드 울타리가 있어도
+    첫 { … 마지막 }을 읽는다. 읽을 수 없으면 빈 목록."""
     start, end = content.find("{"), content.rfind("}")
     if start < 0 or end <= start:
         return []
@@ -553,15 +617,10 @@ def _parse_texts(content: str) -> list[str]:
         parsed = json.loads(content[start : end + 1])
     except ValueError:
         return []
-    texts = parsed.get("texts") if isinstance(parsed, dict) else None
-    if not isinstance(texts, list):
+    found = parsed.get(field) if isinstance(parsed, dict) else None
+    if not isinstance(found, list):
         return []
-    cleaned = [str(text).strip() for text in texts]
-    return [
-        text
-        for text in cleaned
-        if records_service.SHORT_TEXT_LENGTH <= len(text) <= GENERATED_TEXT_MAX_LENGTH
-    ]
+    return [str(text).strip() for text in found]
 
 
 def parse_json_items(content: Any) -> list[dict[str, Any]]:

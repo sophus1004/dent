@@ -47,7 +47,7 @@ def fake_servers() -> Iterator[None]:
     app.dependency_overrides.clear()
 
 
-async def test_list_connections_returns_three_roles_when_nothing_is_saved(client, db_session):
+async def test_list_connections_returns_every_role_when_nothing_is_saved(client, db_session):
     # 실행
     response = await client.get(API)
 
@@ -64,7 +64,7 @@ async def test_list_connections_returns_three_roles_when_nothing_is_saved(client
             "updated_at": None,
             "check": None,
         }
-        for role in ("embedding", "jev", "llm")
+        for role in ("embedding", "jev", "llm", "target")
     ]
 
 
@@ -152,6 +152,24 @@ async def test_save_llm_connection_checks_and_hides_key(client, db_session):
     assert body["check"]["facts"]["models"] == ["test-chat", "test-chat-mini"]
     assert LLM_KEY not in response.text
     assert LLM_KEY not in (await client.get(API)).text
+
+
+async def test_save_target_connection_works_like_llm_and_needs_a_model(client, db_session):
+    # 실행: 학습할 모델은 LLM과 같은 방식(공급자 · 주소 · 모델)으로 붙는다
+    saved = await client.put(
+        f"{API}/target", json={**LLM, "model": "test-chat-mini", "api_key": LLM_KEY}
+    )
+    missing = await client.put(f"{API}/target", json={**LLM, "model": ""})
+    listed = {row["role"]: row for row in (await client.get(API)).json()}
+
+    # 확인
+    assert saved.status_code == status.HTTP_200_OK
+    assert saved.json()["check"]["ok"] is True
+    assert missing.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert missing.json() == {
+        "detail": "학습할 모델은 모델 이름이 필요합니다. [연결 확인]으로 목록을 받아 고르세요."
+    }
+    assert listed["target"]["model"] == "test-chat-mini"
 
 
 async def test_save_llm_connection_keeps_saved_key_when_key_is_left_blank(client, db_session):

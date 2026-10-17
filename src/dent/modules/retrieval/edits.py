@@ -15,7 +15,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dent.modules.retrieval import repeats
+from dent.modules.retrieval import lengths, repeats
 from dent.modules.retrieval import service as retrieval_service
 from dent.modules.retrieval.models import (
     DEFAULT_CHUNK_OVERLAP,
@@ -28,6 +28,7 @@ from dent.modules.retrieval.models import (
     Judgment,
     JudgmentSource,
     Query,
+    QuerySource,
     Shape,
     Suggestion,
     SuggestionDecision,
@@ -41,7 +42,6 @@ from dent.modules.retrieval.text_rules import (
     best_chunk,
     chunk_text,
     clean_text,
-    estimate_tokens,
     has_broken_text,
     lexical_overlap,
 )
@@ -173,12 +173,33 @@ async def mark_skip_generation(db: AsyncSession, *, dataset_id: int, log: Change
     return changed
 
 
-def _chunks_of(document: Document, *, limit: int, overlap: int) -> list[Chunk]:
-    """문서를 나눌 때의 청크들. 나누기와 어림이 같은 규칙을 쓴다."""
+def rewrite_query(query: Query, text: str, *, log: ChangeLog) -> None:
+    """도우미가 LLM으로 질의를 고쳐 쓴다. 원본 · 사람 질의는 출처를 helper로 바꾼다(합성 질의는 그대로 합성).
+    되돌리면 글과 출처를 함께 돌린다(전 값에 둘 다 적는다)."""
+    log.add(
+        target=HelperTarget.QUERY,
+        field_name=HelperField.TEXT,
+        query_id=query.id,
+        before={"text": query.text, "source": query.source},
+        after=text,
+    )
+    query.text = text
+    query.text_hash = make_text_hash(text)
+    if query.source in (QuerySource.ORIGINAL.value, QuerySource.HUMAN.value):
+        query.source = QuerySource.HELPER.value
+    query.row_version += 1
+
+
+def _chunks_of(
+    document: Document, *, limit: int, overlap: int, count: lengths.TokenCounter
+) -> list[Chunk]:
+    """문서를 나눌 때의 청크들. 나누기와 어림이 같은 규칙 · 같은 토큰 세기를 쓴다."""
     # 학습 글에는 제목 · 머리말 칸 · 구획 경로가 앞에 붙으므로 그만큼 본문 자리를 줄인다.
     prefix = HEADER_SEPARATOR.join(part for part in (document.title, document.header) if part)
-    reserve = estimate_tokens(prefix) + SECTION_RESERVE_TOKENS
-    return chunk_text(document.text, max_tokens=max(limit - reserve, limit // 2), overlap=overlap)
+    reserve = count(prefix) + SECTION_RESERVE_TOKENS
+    return chunk_text(
+        document.text, max_tokens=max(limit - reserve, limit // 2), overlap=overlap, count=count
+    )
 
 
 @dataclass(frozen=True)
@@ -204,7 +225,10 @@ async def split_sample(
             .limit(SPLIT_ESTIMATE_SAMPLE)
         )
     )
-    chunks = [_chunks_of(document, limit=limit, overlap=overlap) for document in documents]
+    count = (await lengths.counting(db, dataset_id=dataset_id)).count
+    chunks = [
+        _chunks_of(document, limit=limit, overlap=overlap, count=count) for document in documents
+    ]
     pieces = [chunk for found in chunks for chunk in found]
     if not documents or not pieces:
         return SplitSample(chunks_per_document=0.0, tokens_per_chunk=0.0)
@@ -235,7 +259,8 @@ async def split_document(
     settings = await retrieval_service.find_settings(db, dataset_id=document.dataset_id)
     limit = max_tokens or (settings.doc_max_tokens if settings else DEFAULT_DOC_MAX_TOKENS)
     overlap = settings.chunk_overlap if settings else DEFAULT_CHUNK_OVERLAP
-    chunks = _chunks_of(document, limit=limit, overlap=overlap)
+    count = (await lengths.counting(db, dataset_id=document.dataset_id)).count
+    chunks = _chunks_of(document, limit=limit, overlap=overlap, count=count)
     if document.token_count <= limit or len(chunks) < 2:
         raise InvalidInputError(NOT_LONG_MESSAGE)
     pieces = []
@@ -409,8 +434,10 @@ async def accept_suggestions(
     kind: SuggestionKind,
     confirmed_only: bool,
     log: ChangeLog | None,
+    ids: list[int] | None = None,
 ) -> int:
-    """대기 중인 제안을 수락한다(도우미). 거짓 오답 · 빠진 정답 → 정답, 정답 의심 → 떼기. 수락한 수."""
+    """대기 중인 제안을 수락한다(도우미). 거짓 오답 · 빠진 정답 → 정답, 정답 의심 → 떼기. ids를 주면 그 제안만.
+    수락한 수."""
     conditions = [
         Suggestion.analysis_id == analysis_id,
         Suggestion.kind == kind.value,
@@ -418,6 +445,8 @@ async def accept_suggestions(
     ]
     if confirmed_only:
         conditions.append(Suggestion.is_confirmed.is_(True))
+    if ids is not None:
+        conditions.append(Suggestion.id.in_(ids))
     suggestions = list(
         await db.scalars(select(Suggestion).where(*conditions).order_by(Suggestion.id))
     )

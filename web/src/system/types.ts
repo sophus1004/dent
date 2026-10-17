@@ -228,7 +228,8 @@ export interface JobQuery {
 // ---------- 외부 모델 연결 ----------
 
 // 연결 역할: 임베딩 서버 · Jev 판정 서버 · LLM
-export type ConnectionRole = 'embedding' | 'jev' | 'llm'
+// target: 학습할 모델 (선택, LLM과 같은 방식으로 붙고 비교 만들기의 응답을 쓴다)
+export type ConnectionRole = 'embedding' | 'jev' | 'llm' | 'target'
 
 // PUT /api/v1/connections/{role}, POST /api/v1/connections/{role}/check 의 요청
 // LLM 공급자. 부르는 방식(키 헤더 · 주소)이 공급자마다 다르다.

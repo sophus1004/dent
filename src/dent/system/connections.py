@@ -1,11 +1,11 @@
-"""외부 모델 서버 연결 (임베딩 · Jev · LLM). 화면의 연결 설정이 저장하고, 모든 곳이 여기서 읽는다.
+"""외부 모델 서버 연결 (임베딩 · Jev · LLM · 학습할 모델). 화면의 연결 설정이 저장하고, 모든 곳이 여기서 읽는다.
 
 연결 값은 system_connections 한 곳에만 둔다(.env에 두지 않는다). 저장하면 다시 실행하지 않아도
 다음 확인부터 새 값을 쓴다: API 서버는 /readyz를 만들 때, 작업 실행기는 몇 초마다 이 테이블을 읽는다.
 연결을 확인한 결과(ConnectionCheck)의 모양과, 확인이 실패한 까닭을 낱말로 바꾸는 일도 여기에 둔다.
 확인 자체는 서버 종류마다 embedding.py · jev.py · llm.py가 하고, 기억(1분)은 status.py가 한다.
 
-LLM은 공급자(provider)와 API 키(api_key)도 적는다. 키를 비워 두고 저장 · 확인하면 저장된 키를 그대로 쓴다
+LLM과 학습할 모델(글을 쓰는 역할)은 공급자(provider)와 API 키(api_key)도 적는다. 키를 비워 두고 저장 · 확인하면 저장된 키를 그대로 쓴다
 (모델만 바꿀 때 키를 다시 넣지 않게). 다만 공급자나 주소가 바뀌면 저장된 키를 쓰지 않는다(다른 서버로 키가 가지 않게).
 
 실행할 때 내장 모델을 올린 역할은 그것이 이긴다: 연결을 읽는 곳(get_connection · list_connections)은 저장된 줄 대신
@@ -33,10 +33,27 @@ INVALID_URL_MESSAGE = "주소는 http:// 또는 https://로 시작해야 합니�
 EMBEDDING_MODEL_REQUIRED_MESSAGE = "임베딩은 모델 이름이 필요합니다. 예: bge-m3"
 LLM_PROVIDER_REQUIRED_MESSAGE = "LLM 공급자를 골라 주세요."
 LLM_MODEL_REQUIRED_MESSAGE = "LLM은 모델 이름이 필요합니다. [연결 확인]으로 목록을 받아 고르세요."
+TARGET_PROVIDER_REQUIRED_MESSAGE = "학습할 모델의 공급자를 골라 주세요."
+TARGET_MODEL_REQUIRED_MESSAGE = (
+    "학습할 모델은 모델 이름이 필요합니다. [연결 확인]으로 목록을 받아 고르세요."
+)
 CONNECTION_NOT_FOUND_MESSAGE = "저장된 연결이 없습니다."
 EMBEDDED_ROLE_MESSAGE = (
     "내장 모델을 쓰는 역할이라 여기서 바꿀 수 없습니다. 다시 실행할 때 '올리지 않음'을 고르세요."
 )
+
+# 글을 쓰는 역할: LLM과 같은 방식(공급자 · 키 · 모델 목록 · 글 만들기)으로 붙는다
+CHAT_ROLES = (ConnectionRole.LLM, ConnectionRole.TARGET)
+
+# 글을 쓰는 역할마다 공급자 · 모델이 없을 때의 문장
+PROVIDER_REQUIRED_MESSAGES = {
+    ConnectionRole.LLM: LLM_PROVIDER_REQUIRED_MESSAGE,
+    ConnectionRole.TARGET: TARGET_PROVIDER_REQUIRED_MESSAGE,
+}
+MODEL_REQUIRED_MESSAGES = {
+    ConnectionRole.LLM: LLM_MODEL_REQUIRED_MESSAGE,
+    ConnectionRole.TARGET: TARGET_MODEL_REQUIRED_MESSAGE,
+}
 
 # 확인 결과의 값 하나. 차원·걸린 시간(수), 장치(글자), 불러 둔 모델 목록 …
 FactValue = str | int | float | list[str] | None
@@ -67,21 +84,21 @@ def new_connection(
 ) -> Connection:
     """저장하지 않은 연결 하나를 만든다. 확인만 할 때 쓴다.
 
-    주소가 틀리거나, 임베딩에 모델이 없거나, LLM에 공급자가 없으면 InvalidInputError.
-    LLM이 아니면 공급자는 버린다.
+    주소가 틀리거나, 임베딩에 모델이 없거나, 글을 쓰는 역할(LLM · 학습할 모델)에 공급자가 없으면 InvalidInputError.
+    글을 쓰는 역할이 아니면 공급자는 버린다.
     """
     cleaned_model = (model or "").strip() or None
     is_embedding = role is ConnectionRole.EMBEDDING
     if is_embedding and cleaned_model is None:
         raise InvalidInputError(EMBEDDING_MODEL_REQUIRED_MESSAGE)
-    is_llm = role is ConnectionRole.LLM
-    if is_llm and provider is None:
-        raise InvalidInputError(LLM_PROVIDER_REQUIRED_MESSAGE)
+    is_chat = role in CHAT_ROLES
+    if is_chat and provider is None:
+        raise InvalidInputError(PROVIDER_REQUIRED_MESSAGES[role])
     return Connection(
         role=role.value,
         base_url=normalize_base_url(base_url),
         model=cleaned_model,
-        provider=provider.value if is_llm and provider is not None else None,
+        provider=provider.value if is_chat and provider is not None else None,
         api_key=(api_key or "").strip() or None,
     )
 
@@ -159,16 +176,16 @@ async def save_connection(
 ) -> Connection:
     """연결을 저장한다(없으면 만들고 있으면 바꾼다).
 
-    주소가 틀리거나 필요한 값(임베딩 모델 · LLM 공급자 · LLM 모델)이 없으면 InvalidInputError.
+    주소가 틀리거나 필요한 값(임베딩 모델 · 글을 쓰는 역할의 공급자 · 모델)이 없으면 InvalidInputError.
     내장 모델을 올린 역할이면 ConflictError. 키를 비웠으면 저장된 키를 그대로 둔다(같은 공급자 · 주소일 때만).
     """
     refuse_embedded_role(role)
     checked = new_connection(
         role=role, base_url=base_url, model=model, provider=provider, api_key=api_key
     )
-    is_llm_without_model = role is ConnectionRole.LLM and checked.model is None
-    if is_llm_without_model:
-        raise InvalidInputError(LLM_MODEL_REQUIRED_MESSAGE)
+    is_chat_without_model = role in CHAT_ROLES and checked.model is None
+    if is_chat_without_model:
+        raise InvalidInputError(MODEL_REQUIRED_MESSAGES[role])
     values = {
         "base_url": checked.base_url,
         "model": checked.model,

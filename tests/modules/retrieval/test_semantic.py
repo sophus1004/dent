@@ -1,8 +1,11 @@
 """검색 뜻 분석 테스트: 만들기 · 상태 · 멈추기 · 지도 점 · 기준 검색 순위 · 기준 검색 점수 · 제안(수락 · 유지)."""
 
+import math
+
 from fastapi import status
 from sqlalchemy import func, select
 
+from dent.modules.retrieval import semantic_checks
 from dent.modules.retrieval.models import (
     Analysis,
     Judgment,
@@ -363,3 +366,28 @@ async def test_first_rank_counts_queries_added_after_analysis_apart_from_no_posi
         item["count"] for label, item in bins.items() if label not in ("정답 없음", "분석에 없음")
     )
     assert ranked == 12
+
+
+def test_kpi_ndcg_uses_judgment_grades_like_beir():
+    # 준비: 질의 둘. 첫 질의는 등급 1 정답이 1위 · 등급 3 정답이 2위, 둘째 질의는 등급 2 정답이 11위(10위 밖)
+    queries = [
+        semantic_checks.QueryFacts(
+            included=True, positives=(0, 1), negatives=(), grades={0: 3, 1: 1}
+        ),
+        semantic_checks.QueryFacts(included=True, positives=(2,), negatives=(), grades={2: 2}),
+    ]
+    rankings = [
+        semantic_checks.RankedPair(query_index=0, document_index=1, rank=1, similarity=0.9),
+        semantic_checks.RankedPair(query_index=0, document_index=0, rank=2, similarity=0.8),
+        semantic_checks.RankedPair(query_index=1, document_index=2, rank=11, similarity=0.5),
+    ]
+
+    # 실행
+    kpi = semantic_checks._kpi(rankings, queries)
+
+    # 확인: 이득 = 등급, 할인 = log2(순위 + 1). 첫 질의는 더 나은 정답(3)이 아래라 1보다 작고, 둘째는 0
+    first = (1 / math.log2(2) + 3 / math.log2(3)) / (3 / math.log2(2) + 1 / math.log2(3))
+    assert kpi is not None
+    assert kpi["ndcg_at_10"] == round(first / 2, 4)
+    assert kpi["mrr_at_10"] == 0.5
+    assert kpi["recall_at_10"] == 0.5

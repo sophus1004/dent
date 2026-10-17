@@ -11,7 +11,7 @@ import itertools
 import math
 import re
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from dent.system.text import make_text_hash, normalize_text
@@ -372,7 +372,9 @@ class Chunk:
     section: str = ""
 
 
-def chunk_text(text: str, *, max_tokens: int, overlap: int = 0) -> list[Chunk]:
+def chunk_text(
+    text: str, *, max_tokens: int, overlap: int = 0, count: Callable[[str], int] = estimate_tokens
+) -> list[Chunk]:
     """문서를 max_tokens 안의 청크로 나눈다. 구조 표지가 있으면 구획부터, 없으면 줄(문단) → 문장 경계로.
 
     구획은 제목 줄(마크다운 # · 짧고 문장 부호로 끝나지 않는 줄 · 개요 번호) · 번호 단위(제N장 · 제N조 …)로
@@ -380,13 +382,14 @@ def chunk_text(text: str, *, max_tokens: int, overlap: int = 0) -> list[Chunk]:
     한 문장이 max_tokens보다 길면 그 문장만 글자 수로 자른다.
     overlap(토큰)을 주면 같은 구획의 앞 청크 끝 문장들(overlap 안)을 다음 청크 앞에 겹친다(구획을 넘어 겹치지 않는다).
     겹친 몫까지 max_tokens 안에 들도록 본문 자리를 그만큼 줄여 담는다.
+    토큰은 count로 센다(학습할 모델의 토크나이저, 없으면 글자 수 어림).
     """
     overlap = max(0, min(overlap, max_tokens // 2))
     budget = max_tokens - overlap
     chunks: list[Chunk] = []
     for section, lines in _sections(lines_of(text)):
-        packed = _pack(lines, max_tokens=budget, section=section)
-        chunks += _overlap(packed, overlap=overlap) if overlap else packed
+        packed = _pack(lines, max_tokens=budget, section=section, count=count)
+        chunks += _overlap(packed, overlap=overlap, count=count) if overlap else packed
     return chunks
 
 
@@ -473,25 +476,27 @@ def _heading(
     return (1, line) if is_body_next or is_heading_next else None
 
 
-def _pack(lines: list[str], *, max_tokens: int, section: str) -> list[Chunk]:
+def _pack(
+    lines: list[str], *, max_tokens: int, section: str, count: Callable[[str], int]
+) -> list[Chunk]:
     """한 구획의 줄들을 max_tokens 안의 청크로 담는다. 너무 짧은 청크는 앞 청크에 붙인다."""
     units: list[str] = []
     for line in lines:
-        if estimate_tokens(line) <= max_tokens:
+        if count(line) <= max_tokens:
             units.append(line)
             continue
         for sentence in _SENTENCE_BREAK.split(line):
             sentence = sentence.strip()
             if not sentence:
                 continue
-            if estimate_tokens(sentence) <= max_tokens:
+            if count(sentence) <= max_tokens:
                 units.append(sentence)
             else:
-                units.extend(_hard_split(sentence, max_tokens=max_tokens))
+                units.extend(_hard_split(sentence, max_tokens=max_tokens, count=count))
     groups: list[list[str]] = []
     size = 0
     for unit in units:
-        unit_tokens = estimate_tokens(unit)
+        unit_tokens = count(unit)
         if groups and size + unit_tokens <= max_tokens:
             groups[-1].append(unit)
             size += unit_tokens
@@ -501,35 +506,33 @@ def _pack(lines: list[str], *, max_tokens: int, section: str) -> list[Chunk]:
     merged: list[Chunk] = []
     for parts in groups:
         joined = "\n".join(parts)
-        chunk = Chunk(text=joined, tokens=estimate_tokens(joined), section=section)
+        chunk = Chunk(text=joined, tokens=count(joined), section=section)
         is_tiny = chunk.tokens < MIN_CHUNK_TOKENS
         if merged and is_tiny and merged[-1].tokens + chunk.tokens <= max_tokens:
             text_joined = f"{merged[-1].text}\n{chunk.text}"
-            merged[-1] = Chunk(
-                text=text_joined, tokens=estimate_tokens(text_joined), section=section
-            )
+            merged[-1] = Chunk(text=text_joined, tokens=count(text_joined), section=section)
         else:
             merged.append(chunk)
     return merged
 
 
-def _overlap(chunks: list[Chunk], *, overlap: int) -> list[Chunk]:
+def _overlap(chunks: list[Chunk], *, overlap: int, count: Callable[[str], int]) -> list[Chunk]:
     """한 구획의 청크마다 앞 청크의 끝(overlap 토큰 안)을 앞에 붙인다. 첫 청크는 그대로다."""
     joined = chunks[:1]
     for previous, chunk in itertools.pairwise(chunks):
-        tail = _tail(previous.text, max_tokens=overlap)
+        tail = _tail(previous.text, max_tokens=overlap, count=count)
         text = f"{tail}\n{chunk.text}" if tail else chunk.text
-        joined.append(Chunk(text=text, tokens=estimate_tokens(text), section=chunk.section))
+        joined.append(Chunk(text=text, tokens=count(text), section=chunk.section))
     return joined
 
 
-def _tail(text: str, *, max_tokens: int) -> str:
+def _tail(text: str, *, max_tokens: int, count: Callable[[str], int]) -> str:
     """글 끝의 문장들 가운데 max_tokens 안에 드는 만큼 (원문 그대로). 끝 문장 하나가 더 길면 끝 낱말들만."""
     pieces = segments(text)
     start = None
     size = 0
     for piece in reversed(pieces):
-        tokens = estimate_tokens(piece.text)
+        tokens = count(piece.text)
         if size + tokens > max_tokens:
             break
         start = piece.start
@@ -538,22 +541,22 @@ def _tail(text: str, *, max_tokens: int) -> str:
         return text[start:].strip()
     words: list[str] = []
     for word in reversed(text.split()):
-        if estimate_tokens(" ".join([word, *words])) > max_tokens:
+        if count(" ".join([word, *words])) > max_tokens:
             break
         words.insert(0, word)
     return " ".join(words)
 
 
-def _hard_split(sentence: str, *, max_tokens: int) -> list[str]:
+def _hard_split(sentence: str, *, max_tokens: int, count: Callable[[str], int]) -> list[str]:
     """한 문장이 너무 길면 글자 수로 자른다 (공백에서 자르려고 한다)."""
     pieces = []
     rest = sentence
     while rest:
-        if estimate_tokens(rest) <= max_tokens:
+        if count(rest) <= max_tokens:
             pieces.append(rest)
             break
         # 토큰 상한에 맞는 글자 수를 어림해 그 근처 공백에서 자른다.
-        ratio = max_tokens / max(estimate_tokens(rest), 1)
+        ratio = max_tokens / max(count(rest), 1)
         cut = max(1, int(len(rest) * ratio))
         space = rest.rfind(" ", 0, cut)
         cut = space if space > cut // 2 else cut

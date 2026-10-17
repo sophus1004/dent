@@ -964,7 +964,7 @@ class ExportCreate(BaseModel):
         default_factory=lambda: list(get_args(RecordSource)), min_length=1
     )
 
-    # 학습 표에 출처 칸(source: original · synthetic)을 넣을지. jsonl에는 늘 넣는다.
+    # 학습 표에 출처 · 묶음 칸(source · label_source · group)을 넣을지. jsonl에는 늘 넣는다.
     source_column: bool = True
 
 

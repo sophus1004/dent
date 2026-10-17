@@ -107,6 +107,9 @@ class ConnectionRole(StrEnum):
     EMBEDDING = "embedding"
     JEV = "jev"
     LLM = "llm"
+    # 학습할 모델 (선택): LLM과 같은 방식(공급자 · 주소 · 키 · 모델)으로 붙고, 비교 만들기의 응답을 쓴다
+    # (학습할 모델이 직접 쓴 응답으로 선호 쌍을 만들게, on-policy).
+    TARGET = "target"
 
 
 class HelperRunStatus(StrEnum):

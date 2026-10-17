@@ -146,8 +146,14 @@ def judge_transport(*, off_topic: str = "엉뚱") -> httpx.MockTransport:
     return transport
 
 
-async def connect_models(db_session: AsyncSession, *, jev: bool = True, llm: bool = False) -> None:
-    """가짜 임베딩(· Jev · LLM) 서버를 연결한 것처럼 저장한다."""
+# 학습할 모델로 연결하는 가짜 모델 이름 (LLM과 같은 가짜 서버)
+TARGET_MODEL = "test-policy"
+
+
+async def connect_models(
+    db_session: AsyncSession, *, jev: bool = True, llm: bool = False, target: bool = False
+) -> None:
+    """가짜 임베딩(· Jev · LLM · 학습할 모델) 서버를 연결한 것처럼 저장한다."""
     await connections_service.save_connection(
         db_session, role=ConnectionRole.EMBEDDING, base_url=EMBEDDING_URL, model=EMBEDDING_MODEL
     )
@@ -163,6 +169,14 @@ async def connect_models(db_session: AsyncSession, *, jev: bool = True, llm: boo
             model="test-chat",
             provider=LlmProvider.OPENAI,
             api_key=LLM_KEY,
+        )
+    if target:
+        await connections_service.save_connection(
+            db_session,
+            role=ConnectionRole.TARGET,
+            base_url=LLM_URL,
+            model=TARGET_MODEL,
+            provider=LlmProvider.VLLM,
         )
 
 

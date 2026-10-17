@@ -50,6 +50,8 @@ class CheckKey(StrEnum):
     TASK_SKEW = "task_skew"
     MISMATCH = "mismatch"
     UNSAFE = "unsafe"
+    # 데이터셋의 모양: 해로운 요청에 거절로 답한 대화(안전 예시)
+    SAFETY_EXAMPLES = "safety_examples"
     # 평가셋과 대조하는 검사
     CONTAMINATION = "contamination"
     # 3 선호: 쌍 하나가 단위
@@ -60,8 +62,13 @@ class CheckKey(StrEnum):
 
 
 # 등급 매기는 방식: any = 하나라도 있으면 심각, warn_any = 하나라도 있으면 주의, rate = 대화 수에 대한 비율,
-# share = 가장 큰 무리의 몫(good_max 이상이면 주의, 심각은 없다)
-GradeKind = Literal["any", "warn_any", "rate", "share"]
+# share = 가장 큰 무리의 몫(good_max 이상이면 주의, 심각은 없다),
+# none = 분모가 MIN_TOTAL_FOR_NONE 이상인데 하나도 없으면 주의(있어야 좋은 것)
+GradeKind = Literal["any", "warn_any", "rate", "share", "none"]
+
+# none 검사가 '없음'을 주의로 보는 분모의 하한. 안전 예시를 3% 안팎 넣는 데이터라면 100건에 3건쯤 있다.
+# 그보다 작은 데이터(예시 · 작은 대조군)에서는 없는 것이 우연일 수 있어 주의로 보지 않는다.
+MIN_TOTAL_FOR_NONE = 100
 
 # 고치는 쪽: rule(규칙) · jev · llm · human(사람). 화면이 '찾기 → 고치기'로 보인다.
 Who = Literal["rule", "jev", "llm", "human"]
@@ -182,6 +189,12 @@ CHECKS: dict[CheckKey, CheckSpec] = {
     CheckKey.UNSAFE: CheckSpec(
         stage=2, kind="warn_any", who=("jev", "human"), actions=("drop", "keep"), needs="jev"
     ),
+    # 해로운 요청에 거절로 답한 예가 조금 있으면 안전이 크게 오르고(약 3%), 너무 많으면 멀쩡한 요청도 거절한다.
+    # 수는 거절 표시가 있는 휴지통 밖 대화(후보), 확인은 거절 검사를 마땅한 거절로 그대로 둔 수다(화면의 값).
+    # 후보가 하나도 없으면 안전 예시도 없으므로 주의다. 과잉 거절은 거절 검사가 빼게 한다.
+    # 요청이 해로운지는 Jev에 묻지 않는다: 해로운 요청 20개 중 13개만 잡고 멀쩡한 요청 5개를 잘못 잡았다.
+    # 한 대화의 문제가 아니라 데이터셋의 모양이라 검토 결정이 없다(안전 예시를 더해 채운다).
+    CheckKey.SAFETY_EXAMPLES: CheckSpec(stage=2, kind="none", who=("human",), actions=()),
     # 3 선호 (쌍 하나가 단위)
     # 고른 응답과 버린 응답이 글자까지 같거나 원본 점수가 같다(배울 것이 없다).
     CheckKey.SAME_PAIR: CheckSpec(stage=3, kind="warn_any", unit="pair", actions=("drop", "keep")),
@@ -279,7 +292,7 @@ CODE_HANGUL = re.compile(
 )
 CODE_HINT = re.compile(r"```|'''|\bdef |\bimport |\w+\([^)]*\)\s*[:{]")
 
-# 같은 조각(4~30자)이 다섯 번 넘게 잇달아 나옴. 글자가 든 조각만 센다(들여쓰기 공백 · 표 구분선은 뺀다).
+# 같은 조각(4~30자)이 다섯 번 이상 잇달아 나옴. 글자가 든 조각만 센다(들여쓰기 공백 · 표 구분선은 뺀다).
 LOOP = re.compile(r"([^\n|]{4,30}?)\1{4,}")
 HAS_LETTER = re.compile(r"[가-힣A-Za-z]")
 
@@ -603,6 +616,8 @@ def grade_of(key: CheckKey, *, count: int, total: int) -> str:
     rate = count / total if total else 0.0
     if spec.kind == "share":
         return "warn" if rate >= spec.good_max else "good"
+    if spec.kind == "none":
+        return "warn" if count == 0 and total >= MIN_TOTAL_FOR_NONE else "good"
     if rate < spec.good_max or count == 0:
         return "good"
     return "warn" if rate < spec.warn_max else "bad"

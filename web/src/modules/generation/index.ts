@@ -36,8 +36,8 @@ const generation: DentModule = {
     export: { name: '내보내기', phases: { writing: '쓰기' } },
     // 학습할 모델 · 최대 길이를 바꾸면 토크나이저를 받아 모든 대화의 길이를 다시 잰다.
     length: { name: '길이 재기' },
-    // 평가셋이 바뀌면 지시를 평가셋과 다시 대조한다.
-    contamination: { name: '오염 대조' },
+    // 평가셋이 바뀌면 지시를 평가셋과 다시 대조한다(8-gram → 임베딩 → LLM 판정).
+    contamination: { name: '오염 대조', phases: { ngram: '8-gram', embedding: '임베딩', judging: 'LLM 판정' } },
   },
   // 가져오기가 끝나면 새 데이터셋 · 수가 사이드바와 홈에 보이게 목록을 다시 읽는다.
   // 그 밖의 작업이 끝나면 데이터셋 화면(머리 · 진단)이 다시 읽게 알린다.

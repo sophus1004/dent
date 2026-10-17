@@ -39,7 +39,7 @@ class CheckRead(BaseModel):
 class ModelInfoRead(BaseModel):
     """홈의 모델 칸 한 줄: 역할 하나의 모델과 상태."""
 
-    # 역할: embedding · jev · llm
+    # 역할: embedding · jev · llm · target
     role: str
 
     # 내장 모델 이름(bge-m3 · laya). 내장이 아니면 null
@@ -83,7 +83,7 @@ class ReadinessRead(BaseModel):
     # 내장 모델이 준비되기 전이면 '내려받는 중 · 43% · 0.9 / 2.2GB' · '불러오는 중'.
     info: dict[str, CheckRead]
 
-    # 홈의 모델 칸: 임베딩 · Jev · LLM 순서로 한 줄씩
+    # 홈의 모델 칸: 임베딩 · Jev · LLM · 학습할 모델 순서로 한 줄씩
     models: list[ModelInfoRead]
 
 
@@ -105,7 +105,7 @@ async def readyz(
 ) -> ReadinessRead:
     """DB 연결, 테이블 버전, storage가 모두 되면 200, 아니면 503.
 
-    작업 실행기와 외부 모델 연결(임베딩 · Jev · LLM)은 참고로만 알려 준다.
+    작업 실행기와 외부 모델 연결(임베딩 · Jev · LLM · 학습할 모델)은 참고로만 알려 준다.
     """
     readiness = await status_service.collect_readiness(get_settings(), transport=transport)
     if not readiness.ready:

@@ -170,7 +170,7 @@ async def test_connection_status_does_not_remember_while_embedded_model_prepares
     assert result.facts["device"] == "mps"
 
 
-async def test_readiness_lists_three_models_off_when_nothing_is_connected(db_session):
+async def test_readiness_lists_four_models_off_when_nothing_is_connected(db_session):
     # 실행
     readiness = await status_service.collect_readiness(
         get_settings(), transport=refused_transport()
@@ -181,4 +181,5 @@ async def test_readiness_lists_three_models_off_when_nothing_is_connected(db_ses
         ("embedding", "off", None),
         ("jev", "off", None),
         ("llm", "off", None),
+        ("target", "off", None),
     ]

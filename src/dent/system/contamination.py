@@ -5,7 +5,11 @@
 문항이 8낱말보다 짧으면 낱말이 MIN_SHORT_WORDS 이상일 때만 그 낱말들이 학습 글에 그대로 이어져 있는지 본다
 (짧은 인사 같은 문항이 아무 글에나 걸리지 않게).
 
-평가셋은 사용자가 가져와 표시한다(평가셋 대부분은 다시 나눠 줄 수 없어 DENT에 넣지 않는다). 대조는 이 PC 안에서만 한다.
+8-gram은 말을 바꾸거나 다른 언어로 옮긴 문항을 놓친다. 그래서 8-gram에 걸리지 않은 학습 글마다 임베딩이 가까운
+평가 문항을 후보로 고르고(semantic_candidates), 모듈이 LLM에 같은 문제인지 묻는다(임베딩 후보 + LLM 판정).
+
+평가셋은 사용자가 가져와 표시한다(평가셋 대부분은 다시 나눠 줄 수 없어 DENT에 넣지 않는다). 대조는 이 PC 안에서만 한다
+(LLM 판정을 켜면 후보 쌍의 글만 연결한 LLM에 보낸다).
 DB를 모르는 계산만 둔다. 문항을 모으고 결과를 적는 일은 모듈이 한다.
 """
 
@@ -14,6 +18,9 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
+import numpy as np
+
+from dent.system import neighbors
 from dent.system.text import normalize_text
 
 # 낱말 몇 개를 이어 겹침을 보나
@@ -28,6 +35,22 @@ MIN_SHORT_WORDS = 3
 
 # n-gram 열쇠의 길이(sha256 앞 바이트). 겹칠 확률은 무시할 만하고 메모리를 아낀다.
 GRAM_KEY_BYTES = 8
+
+# 뜻으로 견주기의 경계는 bge-m3로 잰 시험 셋(평가 문항 20 · 학습 지시 45)에서 정했다: 바꿔 쓴 문항은 0.80 이상,
+# 영어로 옮긴 문항은 가장 먼 것이 0.68, 주제만 같은 다른 문제는 가장 가까운 것이 0.75, 상관없는 지시는 0.79였다.
+# 그 셋에서 8-gram은 오염 15건 가운데 5건, 이 후보에 LLM 판정을 더하면 15건을 오탐 없이 잡았다.
+
+# 학습 글마다 견줄 평가 문항 수 (가까운 것부터)
+SEMANTIC_TOP = 3
+
+# 후보로 삼는 코사인 하한 (옮긴 문항까지 들어오게 낮게 두고, 가르는 일은 LLM이 한다)
+SEMANTIC_FLOOR = 0.65
+
+# LLM 없이 임베딩만으로 겹침으로 보는 코사인 (주제만 같은 문제 · 상관없는 지시가 넘지 않는 높이)
+SIMILAR_LIMIT = 0.9
+
+# 데이터셋 단위: 어느 평가셋이든 문항 가운데 이 몫보다 많은 문항과 겹치면 학습셋의 출처 전체를 의심한다(Tülu 3)
+DATASET_SHARE_LIMIT = 0.02
 
 
 @dataclass(frozen=True)
@@ -96,6 +119,40 @@ class EvalIndex:
                 if short in padded:
                     return Match(eval_id=eval_id, coverage=1.0)
         return best
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """뜻으로 견줄 후보: 학습 글 하나와 임베딩이 가까운 평가 문항 하나."""
+
+    # 학습 글 순서 (부른 쪽이 준 벡터 목록의)
+    train: int
+
+    # 평가 문항 순서 (부른 쪽이 준 벡터 목록의)
+    eval: int
+
+    # 코사인 유사도
+    similarity: float
+
+
+def semantic_candidates(
+    train_vectors: np.ndarray,
+    eval_vectors: np.ndarray,
+    *,
+    top: int = SEMANTIC_TOP,
+    floor: float = SEMANTIC_FLOOR,
+) -> list[Candidate]:
+    """학습 글마다 코사인이 floor 이상인 평가 문항 위 top개. 가까운 쌍부터(같으면 학습 글 · 문항 순서)."""
+    found = neighbors.nearest_in(train_vectors, eval_vectors, k=top)
+    candidates = [
+        Candidate(train=train, eval=int(eval_index), similarity=float(similarity))
+        for train in range(len(found.indices))
+        for eval_index, similarity in zip(
+            found.indices[train], found.similarities[train], strict=True
+        )
+        if similarity >= floor
+    ]
+    return sorted(candidates, key=lambda c: (-c.similarity, c.train, c.eval))
 
 
 def _gram(words: list[str]) -> bytes:

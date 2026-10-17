@@ -3,14 +3,17 @@
 파일 자리 · 기록 · 내려받기 · 보관은 시스템(system/exports.py)이 한다.
 
 파일 모양
-- train_jsonl: 한 줄에 {"text", "label", "label_text", "source"}. label은 라벨 목록의 번호(0부터), label_text는
-  라벨 이름이다(SetFit · 허깅페이스 datasets가 쓰는 칸 이름).
-- train_table: csv text · label · label_text (+ source, 고를 수 있다).
+- train_jsonl: 한 줄에 {"text", "label", "label_text", "source", "label_source", "group"}. label은 라벨 목록의 번호(0부터),
+  label_text는 라벨 이름이다(SetFit · 허깅페이스 datasets가 쓰는 칸 이름).
+- train_table: csv text · label · label_text (+ source · label_source · group, 고를 수 있다).
 - labels: json {"id2label": {"0": 이름}, "label2id": {이름: 0}} (transformers 모델 설정에 그대로 넣는다).
 라벨 번호는 학습에 쓰는 문장이 있는 라벨에 라벨 번호(만든 순)대로 0부터 매긴다. 넣을 출처를 골라도 번호는
 바뀌지 않아, 따로 만든 파일끼리도 번호가 같다.
 train · valid · test로 나누지 않는다. 학습에 쓰는 문장(학습 제외 · 휴지통 · 라벨 없음은 뺌)을 모두 넣고,
-출처 칸(original · synthetic)으로 도우미가 만든 새 문장을 가를 수 있게 한다.
+출처 칸(original · synthetic)으로 도우미가 만든 새 문장을, 라벨 출처 칸(original · helper)으로 도우미가 바꾼
+라벨을 가를 수 있게 한다(학습 · 평가에서 AI가 손댄 것을 빼거나 따로 볼 수 있게).
+묶음 칸(group)은 같은 글이거나 가장 최근 뜻 분석의 근접 중복 쌍으로 이어진 문장들의 대표 번호(가장 작은 문장 번호)다.
+받은 쪽이 학습 · 평가로 나눌 때 묶음 단위로 나누면(GroupShuffleSplit 등) 거의 같은 문장이 양쪽에 들어가지 않는다.
 심각이 남아도 막지 않는다. 미리 보기가 남은 심각 · 주의를 보인다.
 """
 
@@ -23,9 +26,15 @@ from typing import Any, get_args
 from sqlalchemy import ColumnElement, and_, case, exists, func, not_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dent.modules.classification import helper_tools
+from dent.modules.classification import helper_tools, records
 from dent.modules.classification import service as classification_service
-from dent.modules.classification.models import Label, Record
+from dent.modules.classification.models import (
+    HelperChange,
+    HelperChangeField,
+    Label,
+    NearDuplicate,
+    Record,
+)
 from dent.modules.classification.schemas import (
     ExportCheckRead,
     ExportCreate,
@@ -37,6 +46,7 @@ from dent.modules.classification.service import IS_EXCLUDED, IS_INCLUDED, IS_SYN
 from dent.system import exports as exports_service
 from dent.system import jobs
 from dent.system.exceptions import InvalidInputError
+from dent.system.groups import Groups
 from dent.system.models import Export
 
 # 파일 모양별 파일 이름 끝
@@ -54,6 +64,13 @@ SOURCE_COLUMN = "source"
 SOURCE_ORIGINAL = "original"
 SOURCE_SYNTHETIC = "synthetic"
 
+# 라벨 출처 칸 이름과 값 (도우미가 바꾼 라벨이면 helper)
+LABEL_SOURCE_COLUMN = "label_source"
+LABEL_SOURCE_HELPER = "helper"
+
+# 묶음 칸 이름 (같은 글 · 근접 중복으로 이어진 문장들의 대표 번호)
+GROUP_COLUMN = "group"
+
 # 파일을 쓸 때 DB에서 한 번에 받는 줄 수 (수백만 건을 한꺼번에 메모리에 올리지 않게)
 STREAM_BATCH = 5_000
 
@@ -67,6 +84,16 @@ NO_RECORDS_MESSAGE = "내보낼 문장이 없습니다. 학습에 쓰는 문장�
 
 # 문장의 출처 (도우미가 만든 새 문장이면 synthetic)
 SOURCE_OF_RECORD = case((IS_SYNTHETIC, SOURCE_SYNTHETIC), else_=SOURCE_ORIGINAL)
+
+# 도우미가 바꾼 라벨인지: 되돌리지 않은 라벨 바꾸기 기록이 있고 지금 라벨이 그 바꾼 뒤 라벨이다
+# (사람이 다시 바꿨으면 지금 라벨이 달라 원본으로 본다).
+IS_LABEL_BY_HELPER = exists().where(
+    HelperChange.record_id == Record.id,
+    HelperChange.field == HelperChangeField.LABEL.value,
+    HelperChange.undone_at.is_(None),
+    HelperChange.after == func.to_jsonb(Record.label_id),
+)
+LABEL_SOURCE_OF_RECORD = case((IS_LABEL_BY_HELPER, LABEL_SOURCE_HELPER), else_=SOURCE_ORIGINAL)
 
 # 내보낼 수 있는 문장: 학습에 쓰고 라벨이 있는 것
 IS_EXPORTABLE = and_(IS_INCLUDED, Record.label_id.is_not(None))
@@ -154,7 +181,8 @@ async def build_export(db: AsyncSession, *, export_id: int, job_id: int) -> None
     if export.format == "labels":
         result = _write_labels(labels, path=path)
     else:
-        rows = _rows(db, dataset_id=export.dataset_id, sources=data.sources)
+        groups = await group_numbers(db, dataset_id=export.dataset_id)
+        rows = _rows(db, dataset_id=export.dataset_id, sources=data.sources, groups=groups)
         if export.format == "train_jsonl":
             result = await _write_jsonl(rows, labels=labels, path=path)
         else:
@@ -205,46 +233,111 @@ def _source_filter(sources: list[str]) -> ColumnElement[bool]:
 def _rows_query(dataset_id: int, sources: list[str]) -> Any:
     # 번호 순으로 한 번 더 정렬해 파일이 늘 같게 한다.
     return (
-        select(Record.text, Record.label_id, SOURCE_OF_RECORD)
+        select(Record.id, Record.text, Record.label_id, SOURCE_OF_RECORD, LABEL_SOURCE_OF_RECORD)
         .where(Record.dataset_id == dataset_id, IS_EXPORTABLE, _source_filter(sources))
         .order_by(Record.id)
     )
 
 
+async def group_numbers(db: AsyncSession, *, dataset_id: int) -> dict[int, int]:
+    """묶음에 들 수 있는 내보낼 문장마다 {문장 번호: 묶음 대표 번호}. 싣지 않은 문장은 혼자다(대표가 자기 번호).
+
+    같은 글(해시)이거나 가장 최근 뜻 분석의 근접 중복 쌍이면 한 묶음이다(이어진 쌍도). 수백만 건이어도
+    묶음에 드는 문장만 읽는다.
+    """
+    pairs = (
+        await db.execute(
+            select(NearDuplicate.text_hash_a, NearDuplicate.text_hash_b).where(
+                NearDuplicate.map_id == records.done_map_id(dataset_id)
+            )
+        )
+    ).all()
+    repeated = (
+        select(Record.text_hash)
+        .where(Record.dataset_id == dataset_id, IS_EXPORTABLE)
+        .group_by(Record.text_hash)
+        .having(func.count() > 1)
+    )
+    paired = {text_hash for pair in pairs for text_hash in pair}
+    grouped = Groups[str]()
+    first_of: dict[str, int] = {}
+    members: list[tuple[int, str]] = []
+    for record_id, text_hash in await db.execute(
+        select(Record.id, Record.text_hash)
+        .where(
+            Record.dataset_id == dataset_id,
+            IS_EXPORTABLE,
+            Record.text_hash.in_(paired) | Record.text_hash.in_(repeated),
+        )
+        .order_by(Record.id)
+    ):
+        first_of.setdefault(text_hash, record_id)
+        grouped.add(text_hash)
+        members.append((record_id, text_hash))
+    for text_hash_a, text_hash_b in pairs:
+        if text_hash_a in grouped and text_hash_b in grouped:
+            grouped.union(text_hash_a, text_hash_b)
+    # 묶음의 대표 번호: 묶음에 든 해시들의 첫 문장 번호 가운데 가장 작은 것
+    lowest: dict[str, int] = {}
+    for text_hash, record_id in first_of.items():
+        root = grouped.find(text_hash)
+        lowest[root] = min(lowest.get(root, record_id), record_id)
+    return {record_id: lowest[grouped.find(text_hash)] for record_id, text_hash in members}
+
+
+# 내보낼 문장 한 줄: (글, 라벨 번호, 출처, 라벨 출처, 묶음 대표 번호)
+Row = tuple[str, int, str, str, int]
+
+
 async def _rows(
-    db: AsyncSession, *, dataset_id: int, sources: list[str]
-) -> AsyncIterator[tuple[str, int, str]]:
-    """내보낼 문장 (글, 라벨 번호, 출처)을 번호 순으로 묶음마다 받아 하나씩 낸다."""
+    db: AsyncSession, *, dataset_id: int, sources: list[str], groups: dict[int, int]
+) -> AsyncIterator[Row]:
+    """내보낼 문장 (글, 라벨 번호, 출처, 라벨 출처, 묶음)을 번호 순으로 묶음마다 받아 하나씩 낸다."""
     result = await db.stream(
         _rows_query(dataset_id, sources).execution_options(yield_per=STREAM_BATCH)
     )
-    async for text, label_id, source in result:
-        yield text, label_id, source
+    async for record_id, text, label_id, source, label_source in result:
+        yield text, label_id, source, label_source, groups.get(record_id, record_id)
 
 
 # ---------- 쓰기 ----------
 
 
-def _line(text: str, *, label: tuple[int, str], source: str) -> dict[str, Any]:
+def _line(
+    text: str, *, label: tuple[int, str], source: str, label_source: str, group: int
+) -> dict[str, Any]:
     number, name = label
-    return {"text": text, "label": number, "label_text": name, SOURCE_COLUMN: source}
+    return {
+        "text": text,
+        "label": number,
+        "label_text": name,
+        SOURCE_COLUMN: source,
+        LABEL_SOURCE_COLUMN: label_source,
+        GROUP_COLUMN: group,
+    }
 
 
 async def _write_jsonl(
-    rows: AsyncIterator[tuple[str, int, str]], *, labels: dict[int, tuple[int, str]], path: Path
+    rows: AsyncIterator[Row], *, labels: dict[int, tuple[int, str]], path: Path
 ) -> dict[str, Any]:
     count = 0
     # 줄바꿈은 OS와 상관없이 \n이다(Windows에서 \r\n이 되지 않게: 같은 데이터면 어느 PC에서나 같은 파일).
     with path.open("w", encoding="utf-8", newline="\n") as file:
-        async for text, label_id, source in rows:
-            line = _line(text, label=labels[label_id], source=source)
+        async for text, label_id, source, label_source, group in rows:
+            line = _line(
+                text,
+                label=labels[label_id],
+                source=source,
+                label_source=label_source,
+                group=group,
+            )
             file.write(json.dumps(line, ensure_ascii=False) + "\n")
             count += 1
     return {"records": count, "labels": len(labels)}
 
 
 async def _write_table(
-    rows: AsyncIterator[tuple[str, int, str]],
+    rows: AsyncIterator[Row],
     *,
     labels: dict[int, tuple[int, str]],
     path: Path,
@@ -253,12 +346,12 @@ async def _write_table(
     count = 0
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(
-            ["text", "label", "label_text", *([SOURCE_COLUMN] if source_column else [])]
-        )
-        async for text, label_id, source in rows:
+        source_columns = [SOURCE_COLUMN, LABEL_SOURCE_COLUMN, GROUP_COLUMN] if source_column else []
+        writer.writerow(["text", "label", "label_text", *source_columns])
+        async for text, label_id, source, label_source, group in rows:
             number, name = labels[label_id]
-            writer.writerow([text, number, name, *([source] if source_column else [])])
+            sources = [source, label_source, group] if source_column else []
+            writer.writerow([text, number, name, *sources])
             count += 1
     return {"records": count, "labels": len(labels)}
 
@@ -294,6 +387,14 @@ async def _preview_line(
     first = (await db.execute(_rows_query(dataset_id, data.sources).limit(1))).first()
     if first is None:
         return "—"
-    text, label_id, source = first
+    record_id, text, label_id, source, label_source = first
     clipped = text if len(text) <= PREVIEW_TEXT_LENGTH else text[:PREVIEW_TEXT_LENGTH] + "…"
-    return json.dumps(_line(clipped, label=labels[label_id], source=source), ensure_ascii=False)
+    # 미리 보기는 묶음을 세지 않는다: 첫 줄은 번호가 가장 작아 묶음이 있어도 대개 그 대표다.
+    line = _line(
+        clipped,
+        label=labels[label_id],
+        source=source,
+        label_source=label_source,
+        group=record_id,
+    )
+    return json.dumps(line, ensure_ascii=False)

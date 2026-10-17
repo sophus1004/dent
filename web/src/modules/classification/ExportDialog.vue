@@ -4,7 +4,7 @@
                  라벨 목록(json: id2label · label2id, transformers 설정). 여럿 고를 수 있고, 라벨 번호는 모든 파일이 같다.
                  나누지 않는다: 학습에 쓰는 문장(학습 제외 · 휴지통 · 라벨 없음 뺌)을 모두 넣는다.
     넣을 출처    원본 · 새 문장(도우미가 만든 것, 파일에는 synthetic) (문장 수)
-    출처 칸      학습 표를 고르면 보인다. 기본 켬 · source 칸. jsonl에는 늘 들어간다
+    출처 · 묶음 칸  학습 표를 고르면 보인다. 기본 켬 · source · label_source · group 칸. jsonl에는 늘 들어간다
     넣지 않음    학습 제외 n · 라벨 없음 n · 휴지통
     미리 보기    고른 대로 만든 첫 줄 · 파일마다 수 · 남은 심각 · 주의(막지 않는다, 그대로 넣음)
   [파일 만들기] → 고른 모양마다 작업("classification", "export") 하나. 만드는 동안 이 창에서 파일마다 대기 · 단계를 보고
@@ -185,12 +185,14 @@ const COLUMN_CHIP = 'rounded-[5px] bg-muted px-1.5 font-mono text-[11px] text-mu
         </div>
 
         <div v-if="choice.formats.includes('train_table')" :class="ROW">
-          <span :class="LABEL">출처 칸</span>
-          <label class="flex cursor-pointer items-center gap-2 pt-1 text-ui">
+          <span :class="LABEL">출처 · 묶음 칸</span>
+          <label class="flex cursor-pointer flex-wrap items-center gap-2 pt-1 text-ui">
             <input v-model="choice.source_column" type="checkbox" class="size-4 accent-[var(--primary)]" data-field="source-column" />
             학습 표에 넣기
             <span :class="COLUMN_CHIP">source</span>
-            <span class="text-muted-foreground">· original · synthetic</span>
+            <span :class="COLUMN_CHIP">label_source</span>
+            <span :class="COLUMN_CHIP">group</span>
+            <span class="text-muted-foreground">· 묶음째 나누기</span>
           </label>
         </div>
 

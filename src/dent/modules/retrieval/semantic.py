@@ -43,7 +43,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
-from dent.modules.retrieval import judging, problems, semantic_checks
+from dent.modules.retrieval import judging, problems, repeats, semantic_checks
 from dent.modules.retrieval import service as retrieval_service
 from dent.modules.retrieval.models import (
     ANALYSIS_BUILDING_STATUSES,
@@ -366,6 +366,8 @@ async def build_analysis(
     dataset = await retrieval_service.get_dataset(db, dataset_id=dataset_id)
     if await _stop_if_canceled(db, analysis=analysis, job_id=job_id):
         return
+    # 토큰을 센 기준이 지금과 다르면(토크나이저가 생기거나 바뀜) 학습 글 · 토큰 수를 먼저 다시 잰다.
+    await repeats.sync_lengths(db, dataset_id=dataset_id)
     settings = await retrieval_service.find_settings(db, dataset_id=dataset_id)
     connection = await embedding_connection(db, settings=settings)
     model = await embedding.ensure_model(db, connection, transport=transport)
@@ -486,6 +488,7 @@ async def build_analysis(
         settings.baseline = {
             "recall_at_10": findings.kpi["recall_at_10"],
             "mrr_at_10": findings.kpi["mrr_at_10"],
+            "ndcg_at_10": findings.kpi["ndcg_at_10"],
         }
     analysis.status = AnalysisStatus.DONE
     analysis.params = projected.params
@@ -688,6 +691,7 @@ async def _query_facts(
     }
     positives: dict[int, list[int]] = {}
     negatives: dict[int, list[int]] = {}
+    grades: dict[int, dict[int, int]] = {}
     for query_id, document_id, grade in await db.execute(
         select(Judgment.query_id, Judgment.document_id, Judgment.grade).where(
             Judgment.dataset_id == dataset_id
@@ -698,6 +702,8 @@ async def _query_facts(
             continue
         target = positives if grade >= POSITIVE_MIN_GRADE else negatives
         target.setdefault(query_id, []).append(position)
+        if grade >= POSITIVE_MIN_GRADE:
+            grades.setdefault(query_id, {})[position] = grade
     facts = []
     for query_id in rows.query_ids:
         if query_id not in info:
@@ -707,6 +713,7 @@ async def _query_facts(
                 included=info[query_id],
                 positives=tuple(positives.get(query_id, ())),
                 negatives=tuple(negatives.get(query_id, ())),
+                grades=grades.get(query_id, {}),
             )
         )
     return facts

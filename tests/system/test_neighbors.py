@@ -41,3 +41,17 @@ def test_nearest_neighbors_returns_what_there_is_when_vectors_are_few():
     # 확인
     assert one.indices.shape == (1, 0)
     assert two.indices.tolist() == [[1], [0]]
+
+
+def test_nearest_in_finds_closest_targets_for_each_query():
+    # 준비: 질의 둘, 대상 셋
+    queries = np.array([[1.0, 0.0], [0.0, 2.0]], dtype=np.float32)
+    targets = np.array([[0.0, 1.0], [1.0, 0.1], [1.0, 1.0]], dtype=np.float32)
+
+    # 실행
+    found = neighbors.nearest_in(queries, targets, k=2)
+
+    # 확인: 길이와 상관없이 코사인으로, 가까운 것부터
+    assert found.indices.tolist() == [[1, 2], [0, 2]]
+    assert found.similarities[0, 0] > found.similarities[0, 1]
+    assert np.isclose(found.similarities[1, 0], 1.0)

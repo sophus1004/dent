@@ -32,6 +32,7 @@ HELPER_INTERRUPTED_MESSAGE = "도우미가 여러 번 중간에 끊겨 멈췄습
 MINE_UNEXPECTED_ERROR_MESSAGE = "오답을 찾는 중 뜻밖의 오류가 났습니다. 로그를 확인하세요."
 NEGATIVE_SCAN_UNEXPECTED_ERROR_MESSAGE = "오답을 훑는 중 뜻밖의 오류가 났습니다. 로그를 확인하세요."
 SCAN_UNEXPECTED_ERROR_MESSAGE = "반복 구간을 살피는 중 뜻밖의 오류가 났습니다. 로그를 확인하세요."
+LENGTH_UNEXPECTED_ERROR_MESSAGE = "토큰을 다시 세는 중 뜻밖의 오류가 났습니다. 로그를 확인하세요."
 EXPORT_UNEXPECTED_ERROR_MESSAGE = "파일을 만드는 중 뜻밖의 오류가 났습니다. 로그를 확인하세요."
 EXPORT_INTERRUPTED_MESSAGE = "내보내기가 여러 번 중간에 끊겨 멈췄습니다. 다시 만들어 주세요."
 
@@ -314,6 +315,33 @@ async def run_scan_job(job: Job) -> None:
         await _fail_job(job_id=job.id, message=SCAN_UNEXPECTED_ERROR_MESSAGE)
 
 
+async def run_length_job(job: Job, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    """토큰 다시 세기 작업 하나: 학습할 모델의 토크나이저를 (없으면) 받고 모든 문서의 학습 글 · 토큰 수를 다시 잰다.
+    transport는 테스트가 가짜 허깅페이스를 줄 때만."""
+    dataset_id = int(job.params["dataset_id"])
+    try:
+        async with get_sessionmaker()() as session:
+            result = await repeats.recount_dataset(
+                session, dataset_id=dataset_id, job_id=job.id, download=True, transport=transport
+            )
+            await jobs.finish_job(
+                session,
+                job_id=job.id,
+                result={
+                    "model": result.model or "글자 수 어림",
+                    "documents": result.documents,
+                    "long_documents": result.long_documents,
+                },
+            )
+            await session.commit()
+    except AppError as error:
+        logger.warning("토큰 다시 세기(데이터셋 %d)가 실패했습니다: %s", dataset_id, error.message)
+        await _fail_job(job_id=job.id, message=error.message)
+    except Exception:
+        logger.exception("토큰 다시 세기(데이터셋 %d)가 뜻밖의 오류로 멈췄습니다.", dataset_id)
+        await _fail_job(job_id=job.id, message=LENGTH_UNEXPECTED_ERROR_MESSAGE)
+
+
 async def _fail_job(*, job_id: int, message: str) -> None:
     async with get_sessionmaker()() as session:
         await session.rollback()
@@ -367,6 +395,7 @@ HELPER_JOB = (retrieval_service.MODULE_NAME, helper.HELPER_JOB_KIND)
 MINE_JOB = (retrieval_service.MODULE_NAME, mining.MINE_JOB_KIND)
 NEGATIVE_SCAN_JOB = (retrieval_service.MODULE_NAME, mining.NEGATIVE_SCAN_JOB_KIND)
 SCAN_JOB = (retrieval_service.MODULE_NAME, repeats.SCAN_JOB_KIND)
+LENGTH_JOB = (retrieval_service.MODULE_NAME, retrieval_service.LENGTH_JOB_KIND)
 EXPORT_JOB = (retrieval_service.MODULE_NAME, exports_service.EXPORT_JOB_KIND)
 
 # (모듈 이름, 작업 종류)별 처리 함수. 작업 실행기의 HANDLERS에 그대로 더해진다.
@@ -377,6 +406,7 @@ HANDLERS: dict[tuple[str, str], JobHandler] = {
     MINE_JOB: run_mine_job,
     NEGATIVE_SCAN_JOB: run_negative_scan_job,
     SCAN_JOB: run_scan_job,
+    LENGTH_JOB: run_length_job,
     EXPORT_JOB: run_export_job,
 }
 

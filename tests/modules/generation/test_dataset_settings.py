@@ -87,7 +87,9 @@ async def test_marking_eval_set_checks_other_datasets_for_contamination(client, 
         "grade": "bad",
     }
     [item] = found
-    assert [problem["snippet"] for problem in item["problems"]] == ["평가셋과 겹침 100%"]
+    assert [problem["snippet"] for problem in item["problems"]] == [
+        f"평가셋과 겹침 100% · 평가 문항: {SHARED}"
+    ]
 
 
 async def test_tokenizer_model_remeasures_long_conversations_by_tokens(client, db_session):

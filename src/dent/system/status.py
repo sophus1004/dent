@@ -1,7 +1,7 @@
 """실행된 뒤의 상태. API 서버의 /readyz가 이것을 돌려준다.
 
 DB 연결, 테이블 버전, storage는 '쓸 준비'의 조건이다. 하나라도 안 되면 준비되지 않은 것이다.
-작업 실행기와 외부 모델 서버(임베딩 · Jev · LLM)는 참고로만 알려 준다. 이것들이 안 돼도 데이터를 보고 고칠 수는 있다.
+작업 실행기와 외부 모델 서버(임베딩 · Jev · LLM · 학습할 모델)는 참고로만 알려 준다. 이것들이 안 돼도 데이터를 보고 고칠 수는 있다.
 
 외부 서버 연결은 system_connections에서 읽고, 확인 결과를 1분 동안 기억한다(화면이 부를 때마다 누르지 않게).
 기억은 (주소, 모델, 공급자, 키)를 함께 적어 두므로 연결을 바꾸면 바로 새로 확인한다. 저장 · 삭제할 때도 기억을 지운다.
@@ -59,7 +59,12 @@ BYTES_PER_GB = 1024**3
 PERCENT = 100
 
 # /readyz가 확인하는 외부 서버
-CHECKED_ROLES = (ConnectionRole.EMBEDDING, ConnectionRole.JEV, ConnectionRole.LLM)
+CHECKED_ROLES = (
+    ConnectionRole.EMBEDDING,
+    ConnectionRole.JEV,
+    ConnectionRole.LLM,
+    ConnectionRole.TARGET,
+)
 
 
 @dataclass(frozen=True)
@@ -120,7 +125,7 @@ class Readiness:
     # 참고로만 알려 주는 상태 (작업 실행기, 임베딩, Jev, LLM)
     info: dict[str, Check] = field(default_factory=dict)
 
-    # 홈의 모델 칸: 임베딩 · Jev · LLM 순서로 한 줄씩
+    # 홈의 모델 칸: 임베딩 · Jev · LLM · 학습할 모델 순서로 한 줄씩
     models: list[ModelInfo] = field(default_factory=list)
 
 
@@ -395,7 +400,7 @@ def forget_connection_status(role: ConnectionRole | None = None) -> None:
 async def list_connection_statuses(
     db: AsyncSession, *, transport: httpx.AsyncBaseTransport | None = None
 ) -> list[ConnectionStatus]:
-    """세 역할(임베딩 · Jev · LLM)의 연결과 상태. 저장하지 않은 역할도 빈 줄로 넣는다."""
+    """역할마다(임베딩 · Jev · LLM · 학습할 모델) 연결과 상태. 저장하지 않은 역할도 빈 줄로 넣는다."""
     saved = {row.role: row for row in await connections.list_connections(db)}
     statuses: list[ConnectionStatus] = []
     for role in ConnectionRole:

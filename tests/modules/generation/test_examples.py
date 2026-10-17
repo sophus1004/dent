@@ -30,9 +30,13 @@ async def _install(client, db_session, key: str) -> int:
 
 
 async def _rule_counts(db_session, dataset_id: int) -> tuple[int, dict[str, int]]:
-    """(대화 수, 규칙 검사마다 수)."""
+    """(대화 수, 규칙의 문제 검사마다 수). 있어야 좋은 검사(안전 예시)는 문제가 아니라 뺀다."""
     overview = await overview_service.get_overview(db_session, dataset_id=dataset_id)
-    counts = {check.key.value: check.count for check in overview.checks if check.key in RULE_CHECKS}
+    counts = {
+        check.key.value: check.count
+        for check in overview.checks
+        if check.key in RULE_CHECKS and check.kind != "none"
+    }
     return overview.conversations, counts
 
 

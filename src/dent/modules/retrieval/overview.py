@@ -285,7 +285,7 @@ async def get_overview(db: AsyncSession, *, dataset_id: int) -> OverviewRead:
                 grade=_grade(long_rate, good_below=LONG_GOOD_BELOW, warn_below=LONG_WARN_BELOW),
                 value=_percent(long_rate),
                 unit="%",
-                sub=f"{max_tokens}토큰 넘음 {long_documents:,}",
+                sub=f"{max_tokens}토큰 넘음 {long_documents:,} · {_counted_by(settings)}",
                 ladder=_rate_ladder(LONG_GOOD_BELOW, LONG_WARN_BELOW),
                 target="documents",
                 problem="long",
@@ -870,6 +870,12 @@ def _check_name(key: str) -> str:
 # ---------- 기준 검색 점수 · 분포 ----------
 
 
+def _counted_by(settings: DatasetSettings | None) -> str:
+    """토큰을 센 기준: 토크나이저의 모델 이름(소유자 뺌) 또는 글자 수 어림."""
+    model = settings.measured_model if settings else None
+    return f"{model.split('/')[-1]} 토크나이저" if model else "글자 수 어림"
+
+
 def _kpi(analysis: Analysis | None, settings: DatasetSettings | None) -> KpiRead | None:
     kpi = (analysis.checks.get("kpi") if analysis else None) or None
     if not kpi:
@@ -878,9 +884,11 @@ def _kpi(analysis: Analysis | None, settings: DatasetSettings | None) -> KpiRead
     return KpiRead(
         recall_at_10=float(kpi["recall_at_10"]),
         mrr_at_10=float(kpi["mrr_at_10"]),
+        ndcg_at_10=kpi.get("ndcg_at_10"),
         evaluated=int(kpi["evaluated"]),
         baseline_recall_at_10=baseline.get("recall_at_10"),
         baseline_mrr_at_10=baseline.get("mrr_at_10"),
+        baseline_ndcg_at_10=baseline.get("ndcg_at_10"),
     )
 
 

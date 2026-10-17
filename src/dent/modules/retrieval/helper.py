@@ -49,8 +49,6 @@ from dent.modules.retrieval.models import (
     POSITIVE_MIN_GRADE,
     AnalysisStatus,
     Document,
-    HelperField,
-    HelperTarget,
     Judgment,
     MapPoint,
     Query,
@@ -109,7 +107,6 @@ from dent.system.models import (
     HelperRun,
     HelperRunStatus,
 )
-from dent.system.text import make_text_hash
 
 HELPER_JOB_KIND = "helper"
 
@@ -144,6 +141,10 @@ JEV_TABLE_ROWS = 8
 # 정답 찾기: 정답 없는 질의마다 기준 검색 상위 몇 개를 Jev에 묻나 · 한 단계에서 Jev에 묻는 최대 수
 FIND_POSITIVE_TOP = 3
 MAX_JEV_PER_STEP = 2_000
+
+# Jev가 확인한 제안(빠진 정답 · 정답 의심 · 거짓 오답)을 LLM이 다시 보는 한 단계의 최대 수. 넘는 것은 제안으로 남아
+# 사람 · AI로 고치기가 본다. Jev 하나로 받으면 이름이 비슷한 함정 문서도 정답이 됐다(예시에서 받은 31건 중 20건이 틀림).
+MAX_LLM_CONFIRM = 300
 
 # 거짓 오답: Jev 예가 이 값 이상이고 확인(0.8) 아래면 답의 일부만 담은 것으로 보고 오답에서 뺀다(정답으로 올리지 않음).
 # 이 값 아래는 진짜 하드 오답으로 남긴다.
@@ -614,6 +615,8 @@ class Helper(Agent):
                 {"name": "R@10", "value": f"{overview.kpi.recall_at_10 * 100:.1f}%"},
                 {"name": "MRR@10", "value": f"{overview.kpi.mrr_at_10:.3f}"},
             ]
+            if overview.kpi.ndcg_at_10 is not None:
+                kpi.append({"name": "nDCG@10", "value": f"{overview.kpi.ndcg_at_10:.3f}"})
         return {"checks": checks, "kpi": kpi}
 
     async def _fix(self, keys: list[str], *, round_no: int, waited: bool) -> None:
@@ -1354,16 +1357,7 @@ class Helper(Agent):
                 query = await db.get(Query, sample.query_id) if sample else None
                 if query is None or not text or text == query.text:
                     continue
-                log.add(
-                    target=HelperTarget.QUERY,
-                    field_name=HelperField.TEXT,
-                    query_id=query.id,
-                    before=query.text,
-                    after=text,
-                )
-                query.text = text
-                query.text_hash = make_text_hash(text)
-                query.row_version += 1
+                edits.rewrite_query(query, text, log=log)
                 done.append(text)
             await db.flush()
             await self._record(state, log, action="질의 고치기", tool="rewrite", samples=done)
@@ -1390,29 +1384,19 @@ class Helper(Agent):
 
         def accept_confirmed(kind: SuggestionKind) -> Any:
             async def run(log: edits.ChangeLog) -> int:
-                analysis = await retrieval_service.latest_done_analysis(db, dataset_id=dataset_id)
-                if analysis is None:
-                    return 0
-                return await edits.accept_suggestions(
-                    db,
-                    dataset_id=dataset_id,
-                    analysis_id=analysis.id,
-                    kind=kind,
-                    confirmed_only=True,
-                    log=log,
-                )
+                return await self._accept_agreed(state, kind, log)
 
             return run
 
         rule(
             "accept_missing_positives",
-            "Jev가 확인한 빠진 정답 제안을 정답으로 붙인다.",
+            "Jev가 확인하고 LLM도 정답이라 본 빠진 정답 제안을 정답으로 붙인다.",
             "정답 붙이기",
             accept_confirmed(SuggestionKind.MISSING_POSITIVE),
         )
         rule(
             "accept_suspect_positives",
-            "Jev가 확인한 정답 의심 제안의 정답을 뗀다.",
+            "Jev가 확인하고 LLM도 답이 아니라 본 정답 의심 제안의 정답을 뗀다.",
             "정답 떼기",
             accept_confirmed(SuggestionKind.SUSPECT_POSITIVE),
         )
@@ -1609,17 +1593,7 @@ class Helper(Agent):
         dataset_id = self.dataset_id
 
         async def accept_false_negatives(log: edits.ChangeLog) -> int:
-            analysis = await retrieval_service.latest_done_analysis(db, dataset_id=dataset_id)
-            if analysis is None:
-                return 0
-            return await edits.accept_suggestions(
-                db,
-                dataset_id=dataset_id,
-                analysis_id=analysis.id,
-                kind=SuggestionKind.FALSE_NEGATIVE,
-                confirmed_only=True,
-                log=log,
-            )
+            return await self._accept_agreed(state, SuggestionKind.FALSE_NEGATIVE, log)
 
         async def unconfirmed(*, partial: bool) -> list[Suggestion]:
             """확인되지 않은 거짓 오답 제안: 답의 일부만(예 0.5~0.8) 또는 하드 오답(예 0.5 아래)."""
@@ -1672,7 +1646,7 @@ class Helper(Agent):
 
         rule(
             "accept_false_negatives",
-            "Jev가 확인한 거짓 오답을 정답으로 바꾼다.",
+            "Jev가 확인하고 LLM도 정답이라 본 거짓 오답을 정답으로 바꾼다.",
             "정답 붙이기",
             accept_false_negatives,
         )
@@ -1687,6 +1661,57 @@ class Helper(Agent):
             "정답과 같은 중복 묶음(본문이 같거나 근접 중복)의 오답을 뗀다.",
             "오답 떼기",
             lambda log: edits.remove_same_negatives(db, dataset_id=dataset_id, log=log),
+        )
+
+    async def _accept_agreed(
+        self, state: StepState, kind: SuggestionKind, log: edits.ChangeLog
+    ) -> int:
+        """Jev가 확인한 제안 가운데 LLM도 같은 답인 것만 받는다(빠진 정답 · 거짓 오답 → 정답, 정답 의심 → 떼기).
+
+        정답을 바꾸는 판단을 Jev 하나로 하지 않는다. LLM에는 질의와 문서만 보이고 Jev 점수는 보이지 않는다.
+        엇갈리거나 모르는 것은 제안으로 남겨(보류) 사람 · AI로 고치기가 본다. 받은 수.
+        """
+        analysis = await retrieval_service.latest_done_analysis(self.db, dataset_id=self.dataset_id)
+        if analysis is None:
+            return 0
+        rows = list(
+            (
+                await self.db.execute(
+                    select(Suggestion.id, Query.text, DOCUMENT_INPUT)
+                    .join(Query, Query.id == Suggestion.query_id)
+                    .join(Document, Document.id == Suggestion.document_id)
+                    .where(
+                        Suggestion.analysis_id == analysis.id,
+                        Suggestion.kind == kind.value,
+                        Suggestion.decision.is_(None),
+                        Suggestion.is_confirmed.is_(True),
+                    )
+                    .order_by(Suggestion.id)
+                    .limit(MAX_LLM_CONFIRM)
+                )
+            ).tuples()
+        )
+        if not rows:
+            return 0
+        answers = await helper_fixes.judge_pairs(self, rows)
+        expected = helper_fixes.NO if kind == SuggestionKind.SUSPECT_POSITIVE else helper_fixes.YES
+        agreed = [
+            suggestion_id
+            for suggestion_id, _q, _d in rows
+            if answers.get(suggestion_id) == expected
+        ]
+        held = len(rows) - len(agreed)
+        if held:
+            await helper_service.add_usage(self.db, run_id=self.run_id, held=held)
+            state.facts["held"] += held
+        return await edits.accept_suggestions(
+            self.db,
+            dataset_id=self.dataset_id,
+            analysis_id=analysis.id,
+            kind=kind,
+            confirmed_only=True,
+            ids=agreed,
+            log=log,
         )
 
     def _common_tools(self, state: StepState, tools: Tools) -> None:

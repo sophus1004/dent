@@ -101,3 +101,8 @@ def count_conversations(path: Path, conversations: list[list[dict[str, Any]]]) -
     ):
         counts[owner] += len(encoded.ids)
     return counts
+
+
+def count_text(path: Path, text: str) -> int:
+    """글 하나의 토큰 수 (특수 토큰 없이). 인코더의 최대 길이 · 청크 크기를 잴 때 쓴다."""
+    return len(load(path).encode(text, add_special_tokens=False).ids)

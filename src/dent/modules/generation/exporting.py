@@ -10,6 +10,8 @@
   DPOTrainer의 대화 선호 모양이다. 휴지통 밖 쌍만 넣는다.
 - prompts_jsonl: 한 줄에 {"prompt": [맥락 메시지], "source": 출처}. GRPO처럼 응답을 학습 중에 만드는 방식이 읽는다.
 train · valid · test로 나누지 않는다. 휴지통 밖을 모두 넣고, 출처 칸(original · synthetic · human)으로 만든 것을 가를 수 있게 한다.
+모든 줄에 묶음 칸 "group"(같은 맥락이거나 가장 최근 뜻 분석의 근접 중복 지시로 이어진 대화들의 대표 번호,
+가장 작은 지시 번호)을 싣는다. 받은 쪽이 묶음 단위로 나누면 거의 같은 지시가 학습 · 평가 양쪽에 들어가지 않는다.
 심각이 남으면 막는다(409): 대화 구조가 깨지거나 빈 응답이 든 파일은 트레이너가 멈추거나 조용히 틀리게 배운다.
 지시만 파일은 응답을 넣지 않으므로 지시 단계(1)의 심각만 본다.
 """
@@ -23,9 +25,9 @@ from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from dent.modules.generation import importing, overview
+from dent.modules.generation import importing, overview, problems
 from dent.modules.generation import service as generation_service
-from dent.modules.generation.models import Pair, Prompt, Response, Source
+from dent.modules.generation.models import NearDuplicate, Pair, Prompt, Response, Source
 from dent.modules.generation.schemas import (
     CheckRead,
     ExportCheckRead,
@@ -37,6 +39,7 @@ from dent.modules.generation.service import IS_ACTIVE, PAIR_IS_ACTIVE
 from dent.system import exports as exports_service
 from dent.system import jobs
 from dent.system.exceptions import ConflictError, InvalidInputError
+from dent.system.groups import Groups
 from dent.system.models import Export
 
 # 파일 모양별 파일 이름 끝
@@ -54,6 +57,9 @@ PROMPTS_STAGES = (1,)
 
 # 출처 칸 이름
 SOURCE_COLUMN = "source"
+
+# 묶음 칸 이름 (같은 맥락 · 근접 중복 지시로 이어진 대화들의 대표 번호)
+GROUP_COLUMN = "group"
 
 # 파일을 쓸 때 DB에서 한 번에 받는 줄 수 (수백만 건을 한꺼번에 메모리에 올리지 않게)
 STREAM_BATCH = 2_000
@@ -168,6 +174,7 @@ def _query(dataset_id: int, fmt: str) -> Any:
         rejected = aliased(Response)
         return (
             select(
+                Prompt.id,
                 Prompt.messages,
                 Prompt.tools,
                 chosen.content,
@@ -184,39 +191,76 @@ def _query(dataset_id: int, fmt: str) -> Any:
         )
     if fmt == "prompts_jsonl":
         return (
-            select(Prompt.messages, Prompt.tools, Prompt.source)
+            select(Prompt.id, Prompt.messages, Prompt.tools, Prompt.source)
             .where(Prompt.dataset_id == dataset_id, IS_ACTIVE)
             .order_by(Prompt.id)
         )
     # 출처는 주 응답을 LLM이 쓰거나 다시 썼으면 응답의 출처(synthetic), 아니면 지시의 출처다.
     source = case((Response.source != Source.ORIGINAL.value, Response.source), else_=Prompt.source)
     return (
-        select(Prompt.messages, Prompt.tools, Response.content, Response.tool_calls, source)
+        select(
+            Prompt.id, Prompt.messages, Prompt.tools, Response.content, Response.tool_calls, source
+        )
         .join(Response, and_(Response.prompt_id == Prompt.id, Response.is_main))
         .where(Prompt.dataset_id == dataset_id, IS_ACTIVE)
         .order_by(Prompt.id)
     )
 
 
-def _line(fmt: str, row: Any) -> dict[str, Any]:
-    """DB 줄 하나를 파일의 한 줄로."""
+def _line(fmt: str, row: Any, *, group: int) -> dict[str, Any]:
+    """DB 줄 하나(맨 앞은 지시 번호)를 파일의 한 줄로."""
     if fmt == "dpo_jsonl":
-        messages, tools, chosen, chosen_calls, rejected, rejected_calls, source = row
+        _prompt_id, messages, tools, chosen, chosen_calls, rejected, rejected_calls, source = row
         line: dict[str, Any] = {
             "prompt": _messages(messages),
             "chosen": _messages(importing.conversation([], chosen, chosen_calls)),
             "rejected": _messages(importing.conversation([], rejected, rejected_calls)),
         }
     elif fmt == "prompts_jsonl":
-        messages, tools, source = row
+        _prompt_id, messages, tools, source = row
         line = {"prompt": _messages(messages)}
     else:
-        messages, tools, content, tool_calls, source = row
+        _prompt_id, messages, tools, content, tool_calls, source = row
         line = {"messages": _messages(importing.conversation(messages, content, tool_calls))}
     if tools:
         line["tools"] = tools
     line[SOURCE_COLUMN] = source
+    line[GROUP_COLUMN] = group
     return line
+
+
+async def group_numbers(db: AsyncSession, *, dataset_id: int) -> dict[int, int]:
+    """묶음에 들 수 있는 휴지통 밖 지시마다 {지시 번호: 묶음 대표 번호}. 싣지 않은 지시는 혼자다.
+
+    맥락이 같거나(해시) 가장 최근 뜻 분석의 근접 중복 쌍이면 한 묶음이다(이어진 쌍도). 수백만 건이어도
+    묶음에 드는 지시만 읽는다.
+    """
+    grouped = Groups[int]()
+    repeated = (
+        select(Prompt.text_hash)
+        .where(Prompt.dataset_id == dataset_id, IS_ACTIVE)
+        .group_by(Prompt.text_hash)
+        .having(func.count() > 1)
+    )
+    first_of: dict[str, int] = {}
+    for prompt_id, text_hash in await db.execute(
+        select(Prompt.id, Prompt.text_hash)
+        .where(Prompt.dataset_id == dataset_id, IS_ACTIVE, Prompt.text_hash.in_(repeated))
+        .order_by(Prompt.id)
+    ):
+        grouped.union(first_of.setdefault(text_hash, prompt_id), prompt_id)
+    analysis = await problems.done_analysis(db, dataset_id=dataset_id)
+    if analysis is not None:
+        active = select(Prompt.id).where(Prompt.dataset_id == dataset_id, IS_ACTIVE)
+        for prompt_a, prompt_b in await db.execute(
+            select(NearDuplicate.prompt_a, NearDuplicate.prompt_b).where(
+                NearDuplicate.analysis_id == analysis.id,
+                NearDuplicate.prompt_a.in_(active),
+                NearDuplicate.prompt_b.in_(active),
+            )
+        ):
+            grouped.union(prompt_a, prompt_b)
+    return grouped.representatives()
 
 
 def _messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -234,9 +278,10 @@ def _messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 async def _lines(db: AsyncSession, *, dataset_id: int, fmt: str) -> AsyncIterator[dict[str, Any]]:
     """파일의 줄들을 번호 순으로 묶음마다 받아 하나씩 낸다."""
+    groups = await group_numbers(db, dataset_id=dataset_id)
     result = await db.stream(_query(dataset_id, fmt).execution_options(yield_per=STREAM_BATCH))
     async for row in result:
-        yield _line(fmt, row)
+        yield _line(fmt, row, group=groups.get(row[0], row[0]))
 
 
 async def _write_jsonl(lines: AsyncIterator[dict[str, Any]], *, path: Path) -> int:
@@ -258,7 +303,8 @@ async def _preview_line(db: AsyncSession, *, dataset_id: int, fmt: str) -> str:
     first = (await db.execute(_query(dataset_id, fmt).limit(1))).first()
     if first is None:
         return "—"
-    line = _line(fmt, first)
+    # 미리 보기는 묶음을 세지 않는다: 첫 줄은 번호가 가장 작아 묶음이 있어도 대개 그 대표다.
+    line = _line(fmt, first, group=first[0])
     for key in ("messages", "prompt", "chosen", "rejected"):
         for message in line.get(key) or []:
             text = message["content"]

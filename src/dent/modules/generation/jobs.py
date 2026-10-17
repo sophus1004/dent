@@ -252,12 +252,26 @@ async def run_length_job(job: Job, *, transport: httpx.AsyncBaseTransport | None
     )
 
 
-async def run_contamination_job(job: Job) -> None:
-    """오염 대조 작업: 데이터셋 하나를 평가셋들과 대조한다."""
+async def run_contamination_job(
+    job: Job,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    llm_transport: httpx.AsyncBaseTransport | None = None,
+) -> None:
+    """오염 대조 작업: 데이터셋 하나를 평가셋들과 대조한다.
+
+    transport · llm_transport는 테스트가 가짜 임베딩 · LLM을 줄 때만.
+    """
     dataset_id = int(job.params["dataset_id"])
     await _run_simple(
         job,
-        lambda session: contamination.run_check(session, dataset_id=dataset_id, job_id=job.id),
+        lambda session: contamination.run_check(
+            session,
+            dataset_id=dataset_id,
+            job_id=job.id,
+            transport=transport,
+            llm_transport=llm_transport,
+        ),
         unexpected=CONTAMINATION_UNEXPECTED_ERROR_MESSAGE,
     )
 

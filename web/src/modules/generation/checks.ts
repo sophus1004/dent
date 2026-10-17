@@ -28,6 +28,7 @@ import {
   Scaling,
   Scissors,
   ShieldAlert,
+  ShieldCheck,
   User,
   WandSparkles,
   Wrench,
@@ -37,7 +38,7 @@ import {
 import type { Check, CheckWords, LadderStep } from '@/system/diagnosis/grades'
 import { fmt } from '@/system/format'
 
-import type { Action, CheckKey, CheckRead, Who } from '@/modules/generation/types'
+import type { Action, CheckKey, CheckRead, ContaminationRead, Who } from '@/modules/generation/types'
 
 export const CHECK_WORDS: Record<CheckKey, CheckWords> = {
   // 1 지시
@@ -72,7 +73,8 @@ export const CHECK_WORDS: Record<CheckKey, CheckWords> = {
   contamination: {
     name: '평가셋 오염',
     icon: FlaskConical,
-    definition: '평가셋으로 표시한 데이터셋의 지시와 8낱말 이상 이어진 겹침이 지시의 50% 이상',
+    definition:
+      '평가셋으로 표시한 데이터셋의 문항과 8낱말 이어진 겹침이 문항의 50% 넘음 · 임베딩이 가까운 문항을 LLM이 같은 문제(바꿔 씀 · 옮김)로 판정 · LLM 없으면 코사인 ≥ 0.9 · 평가 문항의 2% 넘게 겹치면 출처 의심',
     impact: '점수 부풀림',
     fix: '빼기',
   },
@@ -190,6 +192,14 @@ export const CHECK_WORDS: Record<CheckKey, CheckWords> = {
     impact: '해로운 답 학습',
     fix: '빼기',
   },
+  safety_examples: {
+    name: '안전 예시',
+    icon: ShieldCheck,
+    definition:
+      '해로운 요청에 거절한 대화 · 거절 검사에서 마땅한 거절로 그대로 둔 것만 셈 · 거절이 하나도 없으면 주의 · 3% 안팎이면 안전이 오르고 많으면 과잉 거절',
+    impact: '해로운 요청에 답함',
+    fix: '안전 예시 더하기',
+  },
   // 3 선호 (쌍 하나가 단위)
   same_pair: {
     name: '같은 쌍 · 동점',
@@ -291,7 +301,7 @@ export const SEMANTIC_KEYS: CheckKey[] = [
 ]
 
 // 한 대화의 문제가 아니라 데이터셋의 모양인 검사 (검토 · 거르기가 없다)
-export const SHAPE_KEYS: CheckKey[] = ['task_skew', 'length_bias']
+export const SHAPE_KEYS: CheckKey[] = ['task_skew', 'length_bias', 'safety_examples']
 
 const UNKNOWN_WORDS: CheckWords = {
   name: '검사',
@@ -315,6 +325,7 @@ function percent(rate: number, digits = 1): string {
 export function ladder(read: CheckRead): LadderStep[] {
   if (read.kind === 'any') return [{ grade: 'good', text: '0건' }, { grade: 'bad', text: '1건 이상' }]
   if (read.kind === 'warn_any') return [{ grade: 'good', text: '0건' }, { grade: 'warn', text: '1건 이상' }]
+  if (read.kind === 'none') return [{ grade: 'good', text: '거절 1건 이상 · 대화 100 미만' }, { grade: 'warn', text: '거절 0건' }]
   if (read.kind === 'share') {
     return [
       { grade: 'good', text: `< ${percent(read.good_max, 0)}` },
@@ -335,8 +346,27 @@ function denominator(read: CheckRead): string {
   return `대화 ${fmt(read.total)}`
 }
 
-/** 서버의 검사 한 줄 → 검사 표 한 줄. [→]는 그 검사의 검토 큐로 간다. 그대로 둔 것이 있으면 작은 글에 수를 붙인다. */
-export function toCheck(read: CheckRead, datasetId: number, conversations: number): Check {
+// 오염 대조에 쓴 방법의 낱말
+const CONTAMINATION_BY: Record<ContaminationRead['by'], string> = {
+  ngram: '8-gram만',
+  embedding: '8-gram · 임베딩',
+  llm: '8-gram · 임베딩 · LLM',
+}
+
+/** 오염 줄의 작은 글: 겹친 평가 문항의 몫 · 출처 의심 · 대조 방법. */
+function contaminationSub(found: ContaminationRead): string {
+  const share = found.eval_items ? `평가 문항 ${percent(found.share)}` : ''
+  return [share, found.suspicious ? '출처 의심' : '', CONTAMINATION_BY[found.by]].filter(Boolean).join(' · ')
+}
+
+/** 서버의 검사 한 줄 → 검사 표 한 줄. [→]는 그 검사의 검토 큐로 간다. 그대로 둔 것이 있으면 작은 글에 수를 붙인다.
+ * 오염 줄에는 대조 방법 · 겹친 평가 문항의 몫(contamination)을 붙인다. */
+export function toCheck(
+  read: CheckRead,
+  datasetId: number,
+  conversations: number,
+  contamination: ContaminationRead | null = null,
+): Check {
   const words = checkWords(read.key)
   const kept = read.kept ? `그대로 둠 ${fmt(read.kept)}` : ''
   if (read.kind === 'share') {
@@ -354,6 +384,28 @@ export function toCheck(read: CheckRead, datasetId: number, conversations: numbe
       view: null,
     }
   }
+  if (read.kind === 'none') {
+    // 데이터셋의 모양이고 있어야 좋은 것(안전 예시): 값은 사람 · 도우미가 마땅한 거절로 확인한 수(kept),
+    // count는 거절 표시가 있는 대화(후보). 후보가 하나도 없을 때만 주의다. 볼 대화가 따로 없다.
+    const confirmed = read.kept
+    return {
+      key: read.key,
+      grade: read.grade,
+      value: fmt(confirmed),
+      unit: '건',
+      sub: [
+        read.total ? percent(confirmed / read.total) : '',
+        `거절 ${fmt(read.count)}`,
+        read.count > confirmed ? `확인 전 ${fmt(read.count - confirmed)}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      ladder: ladder(read),
+      definition: words.definition,
+      scope: ['분모', `휴지통 밖 대화 ${fmt(read.total)}`],
+      view: null,
+    }
+  }
   const unit = read.unit === 'pair' ? '쌍' : '건'
   const rateText = read.kind === 'rate' || read.sampled ? `${percent(read.rate)} · ${denominator(read)}` : ''
   return {
@@ -361,7 +413,9 @@ export function toCheck(read: CheckRead, datasetId: number, conversations: numbe
     grade: read.grade,
     value: fmt(read.count),
     unit,
-    sub: [rateText, kept].filter(Boolean).join(' · '),
+    sub: [rateText, read.key === 'contamination' && contamination ? contaminationSub(contamination) : '', kept]
+      .filter(Boolean)
+      .join(' · '),
     ladder: ladder(read),
     definition: words.definition,
     scope: ['분모', read.unit === 'pair' ? `휴지통 밖 쌍 ${fmt(read.total)}` : `휴지통 밖 대화 ${fmt(conversations)}`],

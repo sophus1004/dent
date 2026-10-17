@@ -8,7 +8,7 @@ from fastapi import status
 from sqlalchemy import select
 
 from dent.modules.generation import conversations
-from dent.modules.generation.models import Pair, Response
+from dent.modules.generation.models import Pair, Prompt, Response
 from tests.modules.generation.helpers import (
     connect_models,
     conversation,
@@ -355,13 +355,15 @@ async def test_export_dpo_and_prompts_files(client, db_session):
         json={"formats": ["dpo_jsonl", "prompts_jsonl"]},
     )
 
-    # 확인: 첫 줄은 DPO 모양, 파일마다 단위와 수
+    # 확인: 첫 줄은 DPO 모양(묶음은 지시 번호), 파일마다 단위와 수
     line = json.loads(preview.json()["line"])
+    prompt_id = await db_session.scalar(select(Prompt.id).where(Prompt.dataset_id == dataset_id))
     assert line == {
         "prompt": [{"role": "user", "content": "요약해 줘"}],
         "chosen": [{"role": "assistant", "content": "핵심만 세 줄입니다."}],
         "rejected": [{"role": "assistant", "content": "모르겠어요. 다른 걸 물어봐 주세요."}],
         "source": "original",
+        "group": prompt_id,
     }
     files = preview.json()["files"]
     assert [(f["format"], f["unit"], f["conversations"]) for f in files] == [

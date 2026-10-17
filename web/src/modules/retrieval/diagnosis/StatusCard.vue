@@ -9,7 +9,7 @@
   카드가 좁으면(도우미 창을 옆에 둘 때) 머리가 두 줄이 되고 주 버튼이 한 줄 전체를 쓴다. 폭은 카드 폭으로 잰다(@container).
 -->
 <script setup lang="ts">
-import { ArrowRight, Bot, ListOrdered, Plug, Sparkles, Target } from '@lucide/vue'
+import { ArrowRight, Bot, ListOrdered, Plug, SignalHigh, Sparkles, Target } from '@lucide/vue'
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 
@@ -103,7 +103,7 @@ function percent(value: number | null | undefined): string {
       </div>
 
       <div class="hidden w-px self-stretch bg-border @min-[56rem]:block" />
-      <div class="grid grid-cols-[auto_auto] gap-x-6" aria-label="기준 검색 점수" data-kpi>
+      <div class="grid grid-cols-[auto_auto_auto] gap-x-6" aria-label="기준 검색 점수" data-kpi>
         <div>
           <div class="flex items-center gap-1.5 text-ui text-muted-foreground">
             <Target class="size-3.5" />Recall@10
@@ -124,6 +124,18 @@ function percent(value: number | null | undefined): string {
           </div>
           <div class="text-kpi font-semibold tracking-[-0.02em]" :class="kpi ? '' : 'text-subtle-foreground'">
             {{ percent(kpi?.mrr_at_10) }}
+          </div>
+        </div>
+        <!-- 판정 등급(1~3)을 이득으로 본 순위 점수 (BEIR의 주 지표) -->
+        <div>
+          <div class="flex items-center gap-1.5 text-ui text-muted-foreground">
+            <SignalHigh class="size-3.5" />nDCG@10
+            <span v-if="kpi?.baseline_ndcg_at_10 !== null && kpi?.baseline_ndcg_at_10 !== undefined" class="text-meta">
+              · 전 {{ percent(kpi.baseline_ndcg_at_10) }}
+            </span>
+          </div>
+          <div class="text-kpi font-semibold tracking-[-0.02em]" :class="kpi?.ndcg_at_10 != null ? '' : 'text-subtle-foreground'" data-ndcg>
+            {{ percent(kpi?.ndcg_at_10) }}
           </div>
         </div>
       </div>

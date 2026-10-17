@@ -18,7 +18,7 @@ import pytest
 from fastapi import status
 from sqlalchemy import select
 
-from dent.modules.classification import helper
+from dent.modules.classification import exporting, helper
 from dent.modules.classification.jobs import run_helper_job
 from dent.modules.classification.models import ExcludeReason, HelperChange, Record
 from dent.system import connections as connections_service
@@ -63,6 +63,8 @@ NEW_NEAR_SAMPLE = "가 쪽에 새로 쓴 문장 하나"
 # 새 문장 가운데 앞서 더한 새 문장 NEW_KEPT와 뜻이 같은 것
 NEW_KEPT = "가 쪽에 새로 쓴 문장 둘"
 NEW_NEAR_MADE = "가 쪽에 새로 쓴 문장 둘을 살짝 바꾼 것"
+# 새 문장의 세부 주제 (가짜 LLM이 고른다)
+SUBTOPICS = ["산", "강"]
 
 
 def fake_jev(*, sure_of_vague: bool = False) -> httpx.MockTransport:
@@ -115,7 +117,7 @@ def fake_llm(
     echo면 계획의 말을 답 본문과 도구의 say에 똑같이 넣는다(실제 LLM이 자주 그런다).
 
     도구 없는 요청: 라벨 판정은 모든 문장에 label, 짧은 문장 판정은 모두 drop, 보고는 두 줄,
-    그 밖(새 문장 요청)은 문장 셋을 JSON으로 준다.
+    세부 주제 고르기는 SUBTOPICS, 그 밖(새 문장 요청)은 문장 셋을 JSON으로 준다.
     """
     requests: list[dict[str, Any]] = []
 
@@ -141,6 +143,8 @@ def fake_llm(
                 return _message(json.dumps({"items": items}, ensure_ascii=False))
             if "보고를 두 줄로" in system:
                 return _message("무엇을 고쳤나?\n고칠 것은 고쳤다.")
+            if "세부 주제를 고른다" in system:
+                return _message(json.dumps({"subtopics": SUBTOPICS}, ensure_ascii=False))
             texts = [NEW_NEAR_SAMPLE, NEW_KEPT, NEW_NEAR_MADE, "엉뚱하게 나로 읽힐 문장"]
             return _message(json.dumps({"texts": texts}, ensure_ascii=False))
         if "plan" in tools:
@@ -756,9 +760,13 @@ async def test_fix_balance_adds_sentences_and_drops_ones_near_label_or_made(
     prompts = [
         body["messages"][-1]["content"]
         for body in llm_transport.requests  # type: ignore[attr-defined]
-        if not body.get("tools") and "라벨:" in body["messages"][-1]["content"]
+        if not body.get("tools") and "새 문장을 만든다" in body["messages"][0]["content"]
     ]
     assert prompts and all(KNOWN in prompt for prompt in prompts)
+    # 먼저 세부 주제를 고르고 묶음마다 나눠 맡긴다. 세부 주제 하나에 4문장이라 2개를 만들 때는 하나만 고르고
+    # (LLM이 더 줘도 자른다), 모자라 다시 물을 때도 그 세부 주제를 맡긴다.
+    assert all("세부 주제(고르게 나눈다):\n- 산" in prompt for prompt in prompts[:2])
+    assert all("- 강" not in prompt for prompt in prompts)
     # 모자라 다시 물을 때는 더한 문장을 '이미 만든 문장', Jev가 버린 문장을 '피할 것'으로 싣는다.
     assert len(prompts) > 1
     assert f"- {NEW_KEPT}" in prompts[1].split("이미 만든 문장")[1]
@@ -979,3 +987,28 @@ async def test_helper_accepts_agreeing_suspect_and_resolves_same_label_near_dupl
         event.payload for event in await _events(db_session, run_id) if event.kind == "jev"
     )
     assert jev_card["meta"] == "뜻 분석 때 판정 · 다시 묻지 않음"
+
+
+async def _label_sources(db_session, dataset_id: int) -> dict[str, list[str]]:
+    """내보낼 문장마다 라벨 출처 (글 → 라벨 출처들)."""
+    rows = await db_session.execute(
+        exporting._rows_query(dataset_id, [exporting.SOURCE_ORIGINAL, exporting.SOURCE_SYNTHETIC])
+    )
+    found: dict[str, list[str]] = {}
+    for _record_id, text, _label_id, _source, label_source in rows:
+        found.setdefault(text, []).append(label_source)
+    return found
+
+
+async def test_export_marks_labels_changed_by_helper_until_undone(client, db_session, make_dataset):
+    # 준비: 도우미가 라벨 충돌을 한 라벨로 맞췄다(라벨 바꾸기)
+    made, run_id = await _started(client, db_session, make_dataset)
+
+    # 실행
+    changed = await _label_sources(db_session, made.dataset.id)
+    await client.post(f"{API}/helper/{run_id}/undo")
+    undone = await _label_sources(db_session, made.dataset.id)
+
+    # 확인: 도우미가 바꾼 라벨은 helper로 내보내 가를 수 있고, 되돌리면 원본이다
+    assert "helper" in changed[CLEAR_CONFLICT]
+    assert all(source == "original" for sources in undone.values() for source in sources)

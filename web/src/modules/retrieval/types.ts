@@ -10,7 +10,7 @@ import type { SourceCreate } from '@/system/types'
 export type Shape = 'documents' | 'pair' | 'mrc' | 'triplet' | 'scored'
 
 // 질의 출처
-export type QuerySource = 'original' | 'synthetic' | 'human'
+export type QuerySource = 'original' | 'synthetic' | 'human' | 'helper'
 
 // 판정 출처
 export type JudgmentSource = 'original' | 'mined' | 'synthetic' | 'helper' | 'human'
@@ -447,10 +447,13 @@ export interface FlowRead {
 export interface KpiRead {
   recall_at_10: number
   mrr_at_10: number
+  // 판정 등급을 이득으로 본 nDCG@10 (이 값을 재기 전에 만든 분석이면 null)
+  ndcg_at_10: number | null
   // 잰 질의 수
   evaluated: number
   baseline_recall_at_10: number | null
   baseline_mrr_at_10: number | null
+  baseline_ndcg_at_10: number | null
 }
 
 export interface BinRead {
@@ -561,8 +564,10 @@ export interface ExportCreate {
   sources: JudgmentSource[]
   negatives: number
   teacher_scores: boolean
-  // 학습 표에 출처 칸(source: original · synthetic · human)을 넣을지. jsonl · BEIR에는 늘 넣는다
+  // 학습 표에 출처 · 묶음 칸(source: original · synthetic · human, group)을 넣을지. jsonl · BEIR에는 늘 넣는다
   source_column: boolean
+  // 평가 BEIR 정답에 정답 문서의 중복 묶음도 넣을지 (끄면 판정한 문서만)
+  qrels_groups: boolean
 }
 
 // 내보낼 파일 하나의 수 (학습에 쓰는 질의 모두)

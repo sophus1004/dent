@@ -96,7 +96,7 @@ export const MARKS: Record<string, MarkWords> = {
   pick: { name: '질의 안 만들 청크', icon: ListFilter, tone: 'warn' },
 }
 
-export const SOURCES: QuerySource[] = ['original', 'synthetic', 'human']
+export const SOURCES: QuerySource[] = ['original', 'synthetic', 'human', 'helper']
 export const SOURCE_NAMES: Record<string, string> = {
   original: '원본',
   synthetic: '합성',

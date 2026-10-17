@@ -609,7 +609,7 @@ export type RecordSource = 'original' | 'synthetic'
 export interface ExportCreate {
   formats: ExportFormat[]
   sources: RecordSource[]
-  // 학습 표에 출처 칸(source)을 넣을지. jsonl에는 늘 들어간다
+  // 학습 표에 출처 · 묶음 칸(source · label_source · group)을 넣을지. jsonl에는 늘 들어간다
   source_column: boolean
 }
 

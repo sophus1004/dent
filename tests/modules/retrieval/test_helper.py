@@ -17,12 +17,15 @@ from dent.modules.retrieval import edits
 from dent.modules.retrieval import service as retrieval_service
 from dent.modules.retrieval.jobs import run_analysis_job, run_helper_job
 from dent.modules.retrieval.models import (
+    Analysis,
     Document,
     HelperChange,
     Judgment,
     MapPoint,
     Query,
     QuerySource,
+    Suggestion,
+    SuggestionKind,
 )
 from dent.modules.retrieval.service import QUERY_INCLUDED
 from dent.system import connections as connections_service
@@ -30,7 +33,7 @@ from dent.system import helper as helper_service
 from dent.system import jobs
 from dent.system.agent import BLOCKED_MESSAGE
 from dent.system.models import ConnectionRole, HelperEvent, HelperRunStatus, LlmProvider
-from tests.modules.retrieval.helpers import connect_embedding, import_csv
+from tests.modules.retrieval.helpers import build_analysis, connect_embedding, import_csv
 from tests.system.helpers import JEV_URL, LLM_KEY, LLM_URL, vector_transport
 
 API = "/api/v1/retrieval"
@@ -46,7 +49,11 @@ SHORT_DOCS = [
 ]
 
 
-def fake_llm(*, judge_answer: str = "yes") -> httpx.MockTransport:
+# 문맥 의존 질의를 고쳐 쓸 때 가짜 LLM이 돌려주는 글
+REWRITTEN_QUERY = "회사 연차휴가 규정에서 정한 연차휴가 일수는?"
+
+
+def fake_llm(*, judge_answer: str = "yes", rewrite_context: bool = False) -> httpx.MockTransport:
     """가짜 LLM (OpenAI 모양). 도구가 있으면 모든 도구를 한 번 부른 뒤 finish_step.
 
     도구 없는 요청: 보고는 두 줄, 판정 · 검수는 모든 항목에 judge_answer, 그 밖(질의 만들기)은 청크마다 질의 둘.
@@ -60,6 +67,11 @@ def fake_llm(*, judge_answer: str = "yes") -> httpx.MockTransport:
         system = body["messages"][0]["content"]
         if not tools and "보고를 두 줄로" in system:
             return _message("무엇을 고쳤나?\n고칠 것은 고쳤다.")
+        if not tools and "고쳐 쓴다" in system:
+            user = body["messages"][-1]["content"]
+            ids = [int(found) for found in re.findall(r"^\[(\d+)\]", user, flags=re.MULTILINE)]
+            items = [{"id": item_id, "text": REWRITTEN_QUERY} for item_id in ids]
+            return _message(json.dumps({"items": items}, ensure_ascii=False))
         if not tools and ("판정자" in system or "검수자" in system):
             user = body["messages"][-1]["content"]
             ids = [int(found) for found in re.findall(r"^\[(\d+)\]", user, flags=re.MULTILINE)]
@@ -84,12 +96,21 @@ def fake_llm(*, judge_answer: str = "yes") -> httpx.MockTransport:
         has_results = any(message["role"] == "tool" for message in body["messages"])
         if has_results:
             return _message("", [_call("finish_step", "다 했나?\n그렇다.")])
-        calls = [
+        skipped = ["finish_step", "hold", "rewrite", "accept_suggestions"]
+        calls = []
+        if rewrite_context and "rewrite" in tools:
+            # 문맥 의존 질의(보기 '- r1 [출처] 이 조항…')는 빼지 않고 고쳐 쓴다.
+            user = body["messages"][-1]["content"]
+            refs = re.findall(r"^- (r\d+) \[\w+\] 이 조항", user, flags=re.MULTILINE)
+            items = [{"ref": ref, "text": REWRITTEN_QUERY} for ref in refs]
+            calls.append(_call("rewrite", "고쳐 쓸까?\n고쳐 쓴다.", items=items))
+            skipped.append("exclude_context")
+        calls += [
             _call(
                 name, f"{name}를 할까?\n한다.", **({"why": "근거 없음"} if name == "hold" else {})
             )
             for name in tools
-            if name not in ("finish_step", "hold", "rewrite", "accept_suggestions")
+            if name not in skipped
         ]
         return _message("", calls or [_call("finish_step", "할 것이 없나?\n없다.")])
 
@@ -720,3 +741,129 @@ async def test_fix_returns_422_for_blocked_left(client, db_session):
 
     # 확인
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+async def _confirmed_false_negative(db_session) -> tuple[int, int]:
+    """세 쌍 데이터셋을 뜻 분석하고, 오답 하나를 Jev가 확인한 거짓 오답 제안으로 둔다. (데이터셋, 제안) 번호."""
+    docs = [
+        f"문서 {index}번의 본문: 주제 {index % 4}에 관한 설명과 사실 {index}" for index in range(8)
+    ]
+    finished = await import_csv(
+        db_session,
+        header=["query", "positive", "negative"],
+        rows=[
+            [f"질의 {index} 주제 {index % 4}", docs[index], docs[index + 4]] for index in range(4)
+        ],
+        mapping={
+            "shape": "triplet",
+            "query": "query",
+            "positive": "positive",
+            "negatives": ["negative"],
+        },
+    )
+    dataset_id = finished.dataset_id
+    await connect_embedding(db_session)
+    await build_analysis(db_session, dataset_id=dataset_id, transport=vector_transport(dim=16))
+    await db_session.execute(Suggestion.__table__.delete())
+    analysis_id = await db_session.scalar(
+        select(Analysis.id).where(Analysis.dataset_id == dataset_id, Analysis.status == "done")
+    )
+    negative = await db_session.scalar(
+        select(Judgment).where(Judgment.dataset_id == dataset_id, Judgment.grade == 0).limit(1)
+    )
+    suggestion = Suggestion(
+        analysis_id=analysis_id,
+        kind=SuggestionKind.FALSE_NEGATIVE.value,
+        query_id=negative.query_id,
+        document_id=negative.document_id,
+        rank=2,
+        similarity=0.9,
+        jev_probability=0.95,
+        is_confirmed=True,
+    )
+    db_session.add(suggestion)
+    await db_session.commit()
+    return dataset_id, suggestion.id
+
+
+async def test_confirmed_false_negative_is_kept_as_suggestion_when_llm_disagrees(
+    client, db_session
+):
+    # 준비: Jev가 확인한 거짓 오답 제안 하나. LLM은 '답이 아니다'라고 본다.
+    dataset_id, suggestion_id = await _confirmed_false_negative(db_session)
+    await _connect_llm(db_session)
+    llm = fake_llm(judge_answer="no")
+    run_id = (await client.post(f"{API}/datasets/{dataset_id}/helper")).json()["id"]
+
+    # 실행
+    await _run_with_jev(db_session, run_id, llm, None)
+    suggestion = await db_session.get(Suggestion, suggestion_id, populate_existing=True)
+    judgment = await db_session.get(
+        Judgment, (suggestion.query_id, suggestion.document_id), populate_existing=True
+    )
+    run = await helper_service.get_run(db_session, run_id=run_id)
+
+    # 확인: Jev 하나로 정답을 만들지 않고 제안으로 남긴다(사람 · AI로 고치기가 본다). LLM에는 Jev 점수를 보이지 않는다.
+    asked = [
+        body["messages"][1]["content"]
+        for body in llm.requests
+        if "판정자" in body["messages"][0]["content"]
+    ]
+    assert asked and all("0.95" not in content and "Jev" not in content for content in asked)
+    assert suggestion.decision is None
+    assert judgment.grade == 0
+    assert run.held >= 1
+
+
+async def test_confirmed_false_negative_becomes_positive_when_llm_agrees(client, db_session):
+    # 준비: Jev가 확인한 거짓 오답 제안 하나. LLM도 '답이다'라고 본다.
+    dataset_id, suggestion_id = await _confirmed_false_negative(db_session)
+    await _connect_llm(db_session)
+    run_id = (await client.post(f"{API}/datasets/{dataset_id}/helper")).json()["id"]
+
+    # 실행
+    await _run_with_jev(db_session, run_id, fake_llm(judge_answer="yes"), None)
+    suggestion = await db_session.get(Suggestion, suggestion_id, populate_existing=True)
+    judgment = await db_session.get(
+        Judgment, (suggestion.query_id, suggestion.document_id), populate_existing=True
+    )
+
+    # 확인: 두 판단이 같아 정답으로 바꾼다
+    assert suggestion.decision == "accepted"
+    assert judgment.grade >= 1
+
+
+async def test_rewritten_context_query_gets_helper_source_and_undo_restores(client, db_session):
+    # 준비: 문서 없이는 뜻이 통하지 않는 원본 질의 하나
+    finished = await import_csv(
+        db_session,
+        header=["query", "positive"],
+        rows=[
+            [
+                "이 조항에서 정한 연차휴가 일수는?",
+                "연차휴가 규정: 1년 근무하면 연차휴가 15일을 준다.",
+            ],
+            ["재택근무 신청 방법", "재택근무 규정: 전날까지 팀장에게 신청한다."],
+        ],
+        mapping={"shape": "pair", "query": "query", "positive": "positive"},
+    )
+    dataset_id = finished.dataset_id
+    await _connect_llm(db_session)
+    run_id = (await client.post(f"{API}/datasets/{dataset_id}/helper")).json()["id"]
+
+    # 실행: 도우미가 문맥 의존 질의를 고쳐 쓴 뒤, 실행 전체를 되돌린다
+    await _run_with_jev(db_session, run_id, fake_llm(rewrite_context=True), None)
+    query_id, source = (
+        await db_session.execute(
+            select(Query.id, Query.source).where(
+                Query.dataset_id == dataset_id, Query.text == REWRITTEN_QUERY
+            )
+        )
+    ).one()
+    undo = await client.post(f"{API}/helper/{run_id}/undo", json={"event_id": None})
+    restored = await db_session.get(Query, query_id, populate_existing=True)
+
+    # 확인: 고쳐 쓴 원본 질의는 출처가 helper가 되어 내보낸 파일에서 가를 수 있고, 되돌리면 글 · 출처가 함께 돌아온다
+    assert source == "helper"
+    assert undo.status_code == status.HTTP_200_OK
+    assert (restored.text, restored.source) == ("이 조항에서 정한 연차휴가 일수는?", "original")

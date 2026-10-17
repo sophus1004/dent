@@ -1,5 +1,5 @@
 """내보내기 테스트: 미리 보기 · 학습 jsonl(오답 풀 전체) · 학습 표 · 평가 BEIR(중복 묶음 정답) · 코퍼스 · 심각이 남으면 409 ·
-교사 점수(Jev, 로짓) · 출처 칸. 분할이 없어 모든 파일에 정답이 있는 질의를 모두 넣는다."""
+교사 점수(Jev, 로짓) · 출처 칸 · 묶음 칸(같은 원문의 정답). 분할이 없어 모든 파일에 정답이 있는 질의를 모두 넣는다."""
 
 import csv
 import io
@@ -10,8 +10,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import status
+from sqlalchemy import select, update
 
+from dent.modules.retrieval import exporting
 from dent.modules.retrieval.jobs import run_export_job
+from dent.modules.retrieval.models import Document, Query
+from dent.modules.retrieval.schemas import ExportCreate
 from dent.system import exports as exports_service
 from dent.system import jobs
 from dent.system.models import Job, JobStatus
@@ -77,17 +81,27 @@ async def test_export_writes_train_jsonl_table_and_beir(client, db_session, impo
     lines = [
         json.loads(line) for line in files["train_jsonl"].read_text(encoding="utf-8").splitlines()
     ]
-    # jsonl은 오답 풀 전체를 넣는다(학습기가 매번 고른다). 표는 칸 수(1)만큼. 모두 출처 칸이 있다.
+    query_ids = list(
+        (
+            await db_session.scalars(
+                select(Query.id).where(Query.dataset_id == finished.dataset_id).order_by(Query.id)
+            )
+        ).all()
+    )
+    # jsonl은 오답 풀 전체를 넣는다(학습기가 매번 고른다). 표는 칸 수(1)만큼. 모두 출처 · 묶음 칸이 있다
+    # (정답 문서가 모두 달라 질의마다 혼자다).
     assert lines[0] == {
         "query": "환불은 며칠 걸리나요",
         "pos": ["환불은 영업일 기준 3일 안에 처리됩니다."],
         "neg": ["배송은 이틀 걸립니다.", "회원 가입은 무료입니다."],
         "source": "original",
+        "group": query_ids[0],
     }
     assert len(lines) == 3
+    assert [line["group"] for line in lines] == query_ids
     rows = list(csv.reader(io.StringIO(files["train_table"].read_text(encoding="utf-8"))))
-    assert rows[0] == ["anchor", "positive", "negative_1", "source"]
-    assert [row[-1] for row in rows[1:]] == ["original"] * 3
+    assert rows[0] == ["anchor", "positive", "negative_1", "source", "group"]
+    assert [row[-2:] for row in rows[1:]] == [["original", str(qid)] for qid in query_ids]
     with zipfile.ZipFile(files["beir"]) as archive:
         names = set(archive.namelist())
         qrels = archive.read("qrels/test.tsv").decode().splitlines()
@@ -97,7 +111,9 @@ async def test_export_writes_train_jsonl_table_and_beir(client, db_session, impo
     assert {"corpus.jsonl", "queries.jsonl", "qrels/test.tsv"} <= names
     assert qrels[0] == "query-id\tcorpus-id\tscore"
     assert len(qrels) == 1 + 3
-    assert [query["metadata"] for query in queries] == [{"source": "original"}] * 3
+    assert [query["metadata"] for query in queries] == [
+        {"source": "original", "group": qid} for qid in query_ids
+    ]
     assert all(item["title"] == "" for item in corpus)
 
 
@@ -221,7 +237,10 @@ async def test_export_corpus_writes_training_texts_and_rules(client, db_session)
     assert [rule["kind"] for rule in rules["removed"]] == ["meta"]
 
 
-async def test_export_beir_counts_duplicate_group_as_positive(client, db_session):
+@pytest.mark.parametrize(("qrels_groups", "expected"), [(True, 2), (False, 1)])
+async def test_export_beir_counts_duplicate_group_as_positive(
+    client, db_session, qrels_groups, expected
+):
     # 준비: 질의의 정답과 본문이 같은 다른 문서(제목만 다름)가 있다.
     finished = await import_csv(
         db_session,
@@ -241,14 +260,17 @@ async def test_export_beir_counts_duplicate_group_as_positive(client, db_session
     [made] = await _run_exports(
         client,
         db_session,
-        {"dataset_id": finished.dataset_id, "data": {"formats": ["beir"], "teacher_scores": False}},
+        {
+            "dataset_id": finished.dataset_id,
+            "data": {"formats": ["beir"], "teacher_scores": False, "qrels_groups": qrels_groups},
+        },
     )
 
-    # 확인
+    # 확인: 켜면 중복 묶음의 다른 문서도 정답, 끄면 판정한 문서만
     _export, path = await exports_service.find_file(db_session, export_id=made["id"])
     with zipfile.ZipFile(path) as archive:
         qrels = archive.read("qrels/test.tsv").decode().splitlines()[1:]
-    assert len(qrels) == 2
+    assert len(qrels) == expected
 
 
 async def test_preview_counts_teacher_scores_to_fill(client, db_session, import_triplets):
@@ -323,3 +345,48 @@ async def test_create_export_puts_teacher_files_after_other_files(
     made = response.json()
     assert [item["format"] for item in made] == ["beir", "corpus", "train_jsonl"]
     assert [item["job_id"] for item in made] == sorted(item["job_id"] for item in made)
+
+
+async def test_export_groups_queries_whose_positives_share_a_source_document(db_session):
+    # 준비: 질의 다섯. 1 · 2는 같은 정답 문서(같은 본문), 3의 정답은 2의 정답과 같은 원문(4의 정답)을 나눈 청크로
+    # 둔다. 5는 다른 문서.
+    finished = await import_csv(
+        db_session,
+        header=["query", "positive"],
+        rows=[
+            ["환불 기간은", "환불은 영업일 기준 3일 안에 처리됩니다."],
+            ["환불은 며칠 걸리나요", "환불은 영업일 기준 3일 안에 처리됩니다."],
+            ["환불 수수료가 있나요", "환불 수수료는 없습니다."],
+            ["배송은 얼마나 걸리나요", "배송은 이틀 걸립니다."],
+            ["회원 가입 비용은", "회원 가입은 무료입니다."],
+        ],
+        mapping={"shape": "pair", "query": "query", "positive": "positive"},
+    )
+    documents = {
+        text: document_id
+        for document_id, text in await db_session.execute(
+            select(Document.id, Document.text).where(Document.dataset_id == finished.dataset_id)
+        )
+    }
+    origin = documents["배송은 이틀 걸립니다."]
+    for text in ("환불은 영업일 기준 3일 안에 처리됩니다.", "환불 수수료는 없습니다."):
+        await db_session.execute(
+            update(Document).where(Document.id == documents[text]).values(source_document_id=origin)
+        )
+    await db_session.commit()
+    query_ids = list(
+        (
+            await db_session.scalars(
+                select(Query.id).where(Query.dataset_id == finished.dataset_id).order_by(Query.id)
+            )
+        ).all()
+    )
+
+    # 실행
+    pack = await exporting._collect(
+        db_session, dataset_id=finished.dataset_id, data=ExportCreate(formats=["train_jsonl"])
+    )
+
+    # 확인: 같은 본문 · 같은 원문(청크와 원문 자체)을 정답으로 둔 질의 넷은 한 묶음, 다른 문서는 혼자
+    first = query_ids[0]
+    assert [pack.query_group[qid] for qid in query_ids] == [first] * 4 + [query_ids[4]]

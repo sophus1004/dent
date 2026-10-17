@@ -14,6 +14,7 @@
   정답 의심(정답인데 SUSPECT_RANK_FROM위 밖). Jev에 물을 순서대로 놓는다.
 """
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -59,6 +60,9 @@ class QueryFacts:
     # 정답 문서의 자리 · 오답 문서의 자리 (문서 행 순서의 번호)
     positives: tuple[int, ...]
     negatives: tuple[int, ...]
+
+    # 정답 문서 자리마다 판정 등급(1~3). nDCG@10의 이득이다. 없는 자리는 1로 본다.
+    grades: dict[int, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -242,7 +246,11 @@ def _rank(
 def _kpi(
     rankings: Sequence[RankedPair], queries: Sequence[QueryFacts]
 ) -> dict[str, float | int | str] | None:
-    """학습에 쓰는 질의 전부(정답이 있는 것)의 Recall@10 · MRR@10."""
+    """학습에 쓰는 질의 전부(정답이 있는 것)의 Recall@10 · MRR@10 · nDCG@10.
+
+    nDCG@10은 BEIR(pytrec_eval의 ndcg_cut_10)과 같게 이득 = 판정 등급, 할인 = log2(순위 + 1)로 잰다.
+    판정이 1~3 등급이라 정답을 찾았는지만 보는 Recall · MRR이 놓치는 '더 나은 정답을 위에 두었나'를 본다.
+    """
     eval_indices = [
         index for index, query in enumerate(queries) if query.included and query.positives
     ]
@@ -255,18 +263,29 @@ def _kpi(
             ranks.setdefault(row.query_index, {})[row.document_index] = row.rank
     recall_sum = 0.0
     reciprocal_sum = 0.0
+    ndcg_sum = 0.0
     for index in eval_indices:
-        positives = queries[index].positives
+        query = queries[index]
         found = ranks.get(index, {})
-        positive_ranks = [found[document] for document in positives if document in found]
+        positive_ranks = [found[document] for document in query.positives if document in found]
         within = [rank for rank in positive_ranks if rank <= KPI_AT]
-        recall_sum += len(within) / len(positives)
+        recall_sum += len(within) / len(query.positives)
         if within:
             reciprocal_sum += 1 / min(within)
+        gains = {document: query.grades.get(document, 1) for document in query.positives}
+        dcg = sum(
+            gain / math.log2(found[document] + 1)
+            for document, gain in gains.items()
+            if document in found and found[document] <= KPI_AT
+        )
+        best = sorted(gains.values(), reverse=True)[:KPI_AT]
+        ideal = sum(gain / math.log2(position + 2) for position, gain in enumerate(best))
+        ndcg_sum += dcg / ideal if ideal else 0.0
     count = len(eval_indices)
     return {
         "recall_at_10": round(recall_sum / count, 4),
         "mrr_at_10": round(reciprocal_sum / count, 4),
+        "ndcg_at_10": round(ndcg_sum / count, 4),
         "evaluated": count,
     }
 

@@ -9,10 +9,13 @@
                 응답 만들기는 응답이 없는 지시(지시만)에 LLM이 응답을 쓴다. 시험 몇 건과 비용 어림을 보이고 허락을 받는다.
                 거절 · 짧은 응답은 Jev가 괜찮다고 본 것을 규칙으로 그대로 두고, 남은 것만 LLM이 본다.
                 지시 불일치는 Jev가 확인한 것(따름 ≤ 0.2)과 의심(0.2~0.5 · 여러 턴 · 코드 응답)을 LLM이 대화마다
-                '마지막 말에 맞게 답했나'로 판정한다(Jev 점수를 보이지 않는다): 맞음 그대로 · 다름 빼기 · 모름 보류.
+                '마지막 말에 맞게 답했나'로 판정한다: 맞음 그대로 · 다름 빼기 · 모름 보류.
                 안전은 Jev가 해롭다고 본 응답을 LLM이 한 번 더 본다.
+                LLM 판정에는 Jev의 점수 · 판단을 보이지 않는다(보이면 LLM이 그쪽으로 끌렸다). 무엇을 볼지와
+                남김 · 뺌의 기준만 주고 대화마다 남김 · 뺌 · 모름을 JSON으로 받는다.
   (문)          선호 단계 앞.
-  3 선호        비교 만들기(허락) → 같은 쌍 · 동점(쌍 빼기) → 판정 반대(LLM이 뒤집기 · 그대로 두기 · 쌍 빼기 · 보류).
+  3 선호        비교 만들기(허락) → 같은 쌍 · 동점(쌍 빼기) → 판정 반대(LLM이 두 응답의 순서를 바꿔 두 번 견주고,
+                두 번이 같을 때만 뒤집기 · 그대로 두기 · 쌍 빼기, 갈리면 보류).
                 만들 데이터가 선호이거나 쌍이 있는 데이터셋만 이 단계가 있다. 비교 만들기는 LLM이 다른 응답을 쓰고
                 Jev가 두 응답을 따로 본 점수로 고른 응답을 정한다(Jev가 없으면 건너뛴다).
   보고          처음과 끝의 진단을 견줘 고친 검사 · 바꿈 · 비용을 싣고 LLM이 두 줄로 말한다. 실행은 여기서 끝난다.
@@ -64,7 +67,6 @@ from dent.system.agent import (
     AgentBudgetExceeded,
     AgentStopped,
     OpenCheck,
-    Tools,
     agent_tool,
     blocking,
     end_run,
@@ -100,20 +102,6 @@ MAX_RUN_TOKENS = 80_000
 MAX_TURNS_PER_STEP = 8
 MAX_REPLY_TOKENS = 1_500
 
-# LLM에 한 번에 보이는 대화 · 쌍 수 (규칙 · Jev 뒤에 남은 애매한 것만 본다)
-REVIEW_LIMIT = 10
-
-# LLM에 보이는 지시 · 응답의 앞부분 글자 수 (토큰 아끼기)
-INSTRUCTION_PREVIEW = 200
-RESPONSE_PREVIEW = 400
-
-# 여러 턴 대화에서 마지막 지시 앞에 함께 보이는 턴 수와 턴마다 글자 수
-EARLIER_TURNS = 4
-EARLIER_PREVIEW = 160
-
-# 앞 턴의 역할 낱말
-ROLE_WORDS = {Role.USER: "사용자", Role.ASSISTANT: "응답"}
-
 # 바꾼 카드에 보이는 보기 수 · 보기 글자 수
 CHANGE_SAMPLE_COUNT = 3
 SAMPLE_LENGTH = 60
@@ -124,7 +112,7 @@ REWRITE_CHUNK = 5
 # 응답 · 비교 만들기를 이만큼 할 때마다 카드 하나로 반영한다(LLM 요청은 making.MAKE_CONCURRENCY건씩 함께)
 MAKE_CHUNK = 8
 
-# 지시 불일치를 LLM이 대화마다 판정할 때 한 번에 보이는 수 · 한 번 실행에 보는 최대 수 · 답의 최대 토큰
+# LLM이 대화 · 쌍마다 판정할 때 한 번에 보이는 수 · 한 번 실행에 보는 최대 수 · 답의 최대 토큰
 VERDICT_BATCH = 12
 MAX_VERDICTS = 60
 VERDICT_MAX_TOKENS = 2_000
@@ -145,6 +133,76 @@ VERDICT_SYSTEM = """아래는 학습 데이터의 대화들이다. 대화마다 
 
 # 판정의 역할 낱말
 VERDICT_ROLES = {Role.USER: "사용자", Role.ASSISTANT: "응답", Role.TOOL: "도구 결과"}
+
+
+@dataclass(frozen=True)
+class Question:
+    """LLM이 대화마다 내리는 남김 · 뺌 판정의 물음. 규칙이 찾은 모양만 적고 Jev의 점수 · 판단은 적지 않는다."""
+
+    # 무엇을 보는지 (규칙이 잡은 모양)
+    what: str
+
+    # 남김(keep) · 뺌(drop)의 기준
+    keep: str
+    drop: str
+
+    # 결과를 말할 때의 짧은 물음
+    ask: str
+
+
+# 검사마다 남김 · 뺌 판정의 물음 (실행 안의 단계 · AI로 고치기가 같이 쓴다)
+QUESTIONS: dict[CheckKey, Question] = {
+    CheckKey.REFUSAL: Question(
+        "마지막 응답에 거절 문구나 'AI 언어 모델로서' 같은 상투구 · 다른 모델 이름이 들어 있다.",
+        "해롭거나 할 수 없는 요청을 거절했다(마땅한 거절).",
+        "멀쩡한 요청을 거절했거나, 상투구만 있고 지시에 답하지 않았다.",
+        "거절 · 상투구가 마땅한가?",
+    ),
+    CheckKey.SHORT: Question(
+        "마지막 응답이 아주 짧다.",
+        "지시가 짧은 답(예 · 아니오 · 번호 · 한 단어 · 숫자 · 라벨)을 바라고, 그 답이 맞다.",
+        "지시가 긴 답을 바라는데 모자라거나, 답이 틀렸거나(계산 · 사실은 직접 확인한다) 엉뚱하다.",
+        "짧은 답이 지시에 맞나?",
+    ),
+    CheckKey.UNSAFE: Question(
+        "마지막 응답이 해로운 내용을 담았는지 본다.",
+        "해로운 내용이 없다(거절했거나, 안전 · 보안 · 의학 · 역사처럼 일반적인 설명이다).",
+        "폭력 · 무기 · 자해 · 범죄를 실제로 해낼 방법, 혐오, 성적인 내용처럼 실제로 해로운 내용을 담았다.",
+        "응답이 실제로 해로운가?",
+    ),
+    CheckKey.REPEAT: Question(
+        "마지막 응답에 같은 문장이 여러 번 나온다.",
+        "인용 · 절차 · 표처럼 되풀이에 뜻이 있다.",
+        "같은 말을 쓸데없이 되풀이한다.",
+        "되풀이에 뜻이 있나?",
+    ),
+    CheckKey.BROKEN: Question(
+        "마지막 응답에 깨진 글자(대체 문자 · 다른 문자 체계)가 있다.",
+        "예시 단어 · 외국어 인용처럼 뜻이 있어 읽을 수 있다.",
+        "글자가 깨져 읽을 수 없다.",
+        "깨진 글자가 읽기를 해치나?",
+    ),
+}
+
+# 남김 · 뺌 판정 지시 (검사마다 물음을 채운다)
+DECIDE_SYSTEM = """아래는 학습 데이터의 대화들이다. 대화마다 마지막 응답을 학습에 남길지 판단한다.
+앞 턴의 흐름을 함께 읽는다(짧은 후속 말 · 번호만 준 말도 앞 턴을 이어 받는 말이다).
+볼 것: {what}
+답은 JSON 목록만: [{{"ref": "r1", "why": "한 줄", "decision": "keep|drop|unsure"}}] (why를 먼저 쓰고 그에 맞게 decision을 고른다)
+- keep: {keep}
+- drop: {drop}
+- unsure: 판단할 근거가 모자라다"""
+
+# 판정 반대 쌍의 견주기 지시. 고른 · 버린 응답이라는 말과 Jev 점수를 보이지 않고 '응답 1 · 2'로만 보인다.
+# 두 응답의 순서를 바꿔 두 번 묻고 두 번이 같을 때만 반영한다(LLM 판정자는 앞뒤 자리에 끌린다).
+PREFER_SYSTEM = """아래는 선호 학습 데이터의 쌍들이다. 쌍마다 지시(앞 턴 포함)와 두 응답이 있다. 지시에 더 알맞은 응답을 고른다.
+답은 JSON 목록만: [{"ref": "r1", "why": "한 줄", "better": "1|2|both_bad|tie"}] (why를 먼저 쓰고 그에 맞게 better를 고른다)
+- 1 · 2: 그 응답이 지시에 더 알맞다
+- both_bad: 두 응답 모두 지시에 맞지 않는다
+- tie: 둘 다 알맞아 가를 수 없다"""
+
+# 견주기 답 → 표 (순서를 바꾸지 않았을 때 응답 1이 고른 응답). 둘 다 나쁨 · 가를 수 없음은 쌍 빼기 쪽 표다.
+PREFER_VOTES = {"both_bad": "drop", "tie": "drop"}
 
 # 비교 만들기 한 건에 Jev에 묻는 수 (두 응답을 따로)
 JEV_CALLS_PER_PAIR = 2
@@ -182,14 +240,17 @@ SYSTEM_BASE = """너는 LLM 학습 데이터(대화) 도구 DENT의 도우미다
 말하기: 도구를 부를 때마다 say에 스스로 묻고 답한 짧은 한국어를 쓴다. 물음은 한 줄로 '?'로 끝내고, 답은 한두 줄.
   존댓말 없이 짧게. 예: "이 거절은 마땅한가?\\n폭발물 제조를 묻는 요청이라 거절이 맞다. 그대로 둔다."
 원칙:
-- 규칙으로 되는 일은 규칙이 이미 했다. 너는 남은 애매한 것만 본다.
-- 할 수 있는 일은 그 단계의 도구뿐이다(keep 문제 아님 · drop 학습에서 빼기(휴지통) · hold 사람에게 넘기기,
-  선호 쌍은 flip 고른 응답과 버린 응답 바꾸기도). 영구 삭제는 없다. 응답을 다시 쓰지 않는다.
-- 빼는 것은 학습 신호가 없거나 해로울 때만. 판단할 근거가 모자라면 hold로 넘긴다.
-- 대화 · 쌍은 ref(r1, r2 …)로 가리킨다. 같은 도구를 되풀이하지 않는다. 단계를 다 하면 finish_step을 부른다."""
+- 규칙으로 되는 일은 규칙이 먼저 한다. 남은 애매한 것은 대화마다 남김 · 뺌 · 모름으로 판정하고, 모름은 사람에게 넘긴다.
+- 빼는 것은 학습 신호가 없거나 해로울 때만. 영구 삭제는 없다(휴지통). 응답 다시 쓰기는 끝난 뒤 사람이 골라서 한다."""
 
 
 # ---------- 단계 ----------
+
+
+# 단계의 LLM 판정 방식 (StepDef.judge)
+JUDGE_DECIDE = "decide"
+JUDGE_FITS = "fits"
+JUDGE_PREFER = "prefer"
 
 
 @dataclass(frozen=True)
@@ -208,8 +269,9 @@ class StepDef:
     # 규칙을 하기 전에 스스로 묻고 답하는 말
     rule_say: str = ""
 
-    # 규칙 뒤 남은 것에 대한 LLM 지시. 빈 글이면 규칙만 하는 단계다(LLM을 부르지 않는다).
-    goal: str = ""
+    # 규칙 뒤 남은 것을 LLM이 판정하는 방식: decide(대화마다 남김 · 뺌, QUESTIONS) · fits(지시 불일치:
+    # 마지막 말에 맞게 답했나) · prefer(쌍: 두 응답의 순서를 바꿔 두 번 견주기). 빈 글이면 규칙만 하는 단계다.
+    judge: str = ""
 
     # 허락 단계인지 (응답 만들기 · 비교 만들기: 시험 · 비용을 보이고 기다린다)
     permission: bool = False
@@ -219,9 +281,6 @@ class StepDef:
 
     # 뜻 분석에 기대는 단계인지 (분석에 없는 새 응답이 있으면 분석을 다시 만든 뒤 돈다)
     needs_analysis: bool = False
-
-    # LLM이 도구 대신 대화마다 '맞게 답했나'를 판정하는 단계인지 (지시 불일치)
-    verdict: bool = False
 
     @property
     def check(self) -> CheckKey | None:
@@ -275,18 +334,15 @@ STEPS: tuple[StepDef, ...] = (
         CheckKey.REFUSAL,
         2,
         "jev_keep",
-        "이 거절 · 상투구가 문제인가?\nJev가 지시를 따른 답으로 확인한 것은 그대로 둔다.",
-        "규칙이 거절 · 상투구로 잡은 대화 가운데 Jev가 지시를 따른다고 확인하지 않은 것이 남았다. 해롭거나 할 수 없는 "
-        "요청을 거절한 것이면 keep, 멀쩡한 요청을 거절했거나 'AI 언어 모델로서' 같은 상투구만 있으면 drop. "
-        "Jev의 '마땅한 거절' 점수는 참고만 한다(멀쩡한 요청의 거절에도 높게 줄 때가 있다).",
+        "이 거절 · 상투구가 문제인가?\nJev가 지시를 따른 답으로 확인한 것은 그대로 두고, 남은 것은 LLM이 대화마다 본다.",
+        JUDGE_DECIDE,
     ),
     StepDef(
         CheckKey.SHORT,
         2,
         "jev_keep",
-        "짧은 응답이 맞는 답인가?\nJev가 지시를 따른 답으로 본 것(분류 과제의 0 · 1 등)은 그대로 둔다.",
-        "짧은 응답 가운데 Jev도 괜찮다고 하지 않은 것이 남았다. 지시가 짧은 답(예 · 아니오 · 번호 · 한 단어)을 "
-        "바라면 keep, 답이 모자라거나 엉뚱하면 drop.",
+        "짧은 응답이 맞는 답인가?\nJev가 지시를 따른 답으로 본 것(분류 과제의 0 · 1 등)은 그대로 두고, 남은 것은 LLM이 본다.",
+        JUDGE_DECIDE,
     ),
     StepDef(
         CheckKey.MISMATCH,
@@ -294,14 +350,16 @@ STEPS: tuple[StepDef, ...] = (
         "",
         "응답이 지시를 따르지 않는다고 Jev가 본 대화가 맞게 답했나?\n"
         "Jev 점수를 보이지 않고 LLM이 대화마다 판정한다. 다르면 빼고, 맞으면 두고, 모르면 사람에게.",
+        JUDGE_FITS,
         needs_analysis=True,
-        verdict=True,
     ),
     StepDef(
         CheckKey.UNSAFE,
         2,
-        goal="Jev가 응답이 해롭다고 본 대화다. 응답이 실제로 해로운 내용(폭력 · 무기 · 자해 · 범죄의 방법, 혐오, "
-        "성적인 내용 등)을 담았으면 drop, 거절했거나 해롭지 않은 내용이면 keep(Jev 오판), 판단이 갈리면 hold.",
+        "",
+        "Jev가 해롭다고 본 응답이 실제로 해로운가?\n"
+        "Jev 점수를 보이지 않고 LLM이 대화마다 본다. 해로우면 빼고, 아니면 두고, 모르면 사람에게.",
+        JUDGE_DECIDE,
         needs_analysis=True,
     ),
     StepDef(PAIRS_KEY, 3, permission=True, title="비교 만들기"),
@@ -314,21 +372,14 @@ STEPS: tuple[StepDef, ...] = (
     StepDef(
         CheckKey.JUDGE_REVERSED,
         3,
-        goal="Jev가 버린 응답이 지시를 더 잘 따른다고 본 쌍이다. 버린 응답이 실제로 더 나으면 flip(고른 · 버린 응답을 "
-        "바꿈), 고른 응답이 맞으면 keep, 두 응답이 모두 나쁘거나 가를 수 없으면 drop(쌍 빼기), 판단이 갈리면 hold.",
+        "",
+        "Jev가 버린 응답을 더 낫게 본 쌍의 고른 응답이 정말 나은가?\n"
+        "LLM에 두 응답을 순서를 바꿔 두 번 묻고, 두 번이 같을 때만 뒤집거나 두거나 쌍을 뺀다.",
+        JUDGE_PREFER,
     ),
 )
 
 STEP_BY_KEY = {step.key: step for step in STEPS}
-
-# LLM이 판정하는 검사의 지시 (AI로 고치기의 판정 · 실행 안의 단계가 같이 쓴다)
-JUDGE_GOALS: dict[CheckKey, str] = {
-    **{CheckKey(step.key): step.goal for step in STEPS if step.goal},
-    CheckKey.REPEAT: "같은 문장이 여러 번 나오는 응답이다. 인용 · 절차 · 표처럼 되풀이가 뜻이 있으면 keep, "
-    "같은 말을 쓸데없이 되풀이하면 drop.",
-    CheckKey.BROKEN: "깨진 글자(대체 문자 · 다른 문자)가 든 대화다. 예시 단어 · 외국어 인용이면 keep, "
-    "글자가 깨져 읽을 수 없으면 drop.",
-}
 
 
 def initial_steps(*, with_pairs: bool) -> list[dict[str, Any]]:
@@ -533,10 +584,9 @@ async def _refresh_analysis_if_needed(db: AsyncSession, *, dataset_id: int) -> N
 
 @dataclass
 class StepState:
-    """단계 하나를 도는 동안의 것: LLM에 보인 대화 · 쌍(ref → 번호)과 사실(바꿈 · 보류 · LLM)."""
+    """단계 하나를 도는 동안의 것: 검사와 사실(바꿈 · 보류 · LLM)."""
 
     key: CheckKey
-    refs: dict[str, int] = field(default_factory=dict)
     facts: dict[str, Any] = field(default_factory=lambda: defaultdict(int))
 
 
@@ -579,6 +629,7 @@ class Helper(Agent):
         transport: httpx.AsyncBaseTransport | None,
         jev_transport: httpx.AsyncBaseTransport | None,
         total: int,
+        target_connection: Connection | None = None,
     ) -> None:
         super().__init__(
             db,
@@ -590,6 +641,8 @@ class Helper(Agent):
         )
         # 휴지통 밖 대화 수 (단계 결과 등급의 분모, 실행을 시작할 때 잰다)
         self.total = total
+        # 학습할 모델 연결 (있으면 비교 만들기의 응답을 그 모델이 쓴다). 가짜 서버는 LLM과 같은 transport를 쓴다.
+        self.target_connection = target_connection
         # 이 실행의 작업 번호 (만들기의 진행률을 적는다)
         self.job_id = run.job_id
 
@@ -751,12 +804,10 @@ class Helper(Agent):
             state.facts["rule"] += await self._apply_rule(
                 check, step.rule, tool=f"rule:{step.rule}"
             )
-        if step.goal and await self._step_count(step) > 0:
-            state.facts["llm"] += await self._judge(state, goal=step.goal)
-        if step.verdict:
+        if step.judge and await self._step_count(step) > 0:
             if not step.rule:
                 await self.say(step.rule_say)
-            state.facts["llm"] += await self._judge_fits(state)
+            state.facts["llm"] += await self._judge(state)
         await self._finish_step(step, state, before, started)
         return STEP_DONE
 
@@ -805,22 +856,43 @@ class Helper(Agent):
 
     # ----- LLM 판정 -----
 
-    async def _judge(self, state: StepState, *, goal: str) -> int:
-        """규칙 뒤 남은 대화(쌍 검사면 쌍)를 LLM이 판정한다(한 번에 REVIEW_LIMIT건). 쓴 토큰."""
+    async def _judge(self, state: StepState) -> int:
+        """규칙 뒤 남은 것을 LLM이 판정한다: 쌍은 순서를 바꿔 두 번 견주고, 지시 불일치는 '맞게 답했나',
+        나머지는 남김 · 뺌. Jev의 점수 · 판단은 보이지 않는다(보이면 LLM이 끌려 맞는 데이터를 뺐다). 쓴 토큰."""
         if CHECKS[state.key].unit == "pair":
-            brief = await self._pair_brief(state)
-        else:
-            brief = await self._conversation_brief(state)
-        return await self.tool_loop(
-            system=f"{SYSTEM_BASE}\n\n지금 단계: {CHECK_NAMES[state.key]} ({state.key})\n할 일: {goal}",
-            brief=brief,
-            tools=self._judge_tools(state),
+            return await self._judge_pairs(state)
+        if state.key == CheckKey.MISMATCH:
+            return await self._decide(
+                state,
+                system=VERDICT_SYSTEM,
+                field="fits",
+                answers={"yes": Action.KEEP, "no": Action.DROP},
+                ask="마지막 말에 맞게 답했나?",
+                labels=("맞음", "다름"),
+            )
+        question = QUESTIONS[state.key]
+        return await self._decide(
+            state,
+            system=DECIDE_SYSTEM.format(what=question.what, keep=question.keep, drop=question.drop),
+            field="decision",
+            answers={"keep": Action.KEEP, "drop": Action.DROP},
+            ask=question.ask,
+            labels=("남김", "뺌"),
         )
 
-    async def _judge_fits(self, state: StepState) -> int:
-        """지시 불일치(확인 · 의심)를 LLM이 대화마다 '마지막 말에 맞게 답했나'로 판정한다(VERDICT_BATCH건씩).
+    async def _decide(
+        self,
+        state: StepState,
+        *,
+        system: str,
+        field: str,
+        answers: dict[str, Action],
+        ask: str,
+        labels: tuple[str, str],
+    ) -> int:
+        """남은 대화를 LLM이 대화마다 판정한다(VERDICT_BATCH건씩, 한 번 실행에 MAX_VERDICTS건까지).
 
-        맞음은 그대로 두고, 다름은 빼고, 모름 · 답을 읽지 못한 것은 사람에게 넘긴다. 쓴 토큰.
+        남김은 그대로 두고, 뺌은 까닭과 함께 빼고, 모름 · 답을 읽지 못한 것은 사람에게 넘긴다. 쓴 토큰.
         """
         ids = (await self._candidates(state.key))[:MAX_VERDICTS]
         used = 0
@@ -835,7 +907,7 @@ class Helper(Agent):
             refs = {f"r{index}": item for index, item in enumerate(items, start=1)}
             reply = await self.chat(
                 [
-                    ChatMessage(role="system", content=VERDICT_SYSTEM),
+                    ChatMessage(role="system", content=system),
                     ChatMessage(
                         role="user",
                         content="\n\n".join(_verdict_line(ref, item) for ref, item in refs.items()),
@@ -845,82 +917,127 @@ class Helper(Agent):
                 max_tokens=VERDICT_MAX_TOKENS,
             )
             used += reply.input_tokens + reply.output_tokens
-            verdicts = _read_verdicts(reply.content)
-            fits = [
+            verdicts = {
+                ref: (answers.get(value), why)
+                for ref, (value, why) in _read_verdicts(reply.content, field=field).items()
+                if ref in refs
+            }
+            kept = [
                 refs[ref].prompt.id
-                for ref, (fit, _why) in verdicts.items()
-                if ref in refs and fit == "yes"
+                for ref, (action, _) in verdicts.items()
+                if action == Action.KEEP
             ]
-            off = {ref: why for ref, (fit, why) in verdicts.items() if ref in refs and fit == "no"}
-            held = len(items) - len(fits) - len(off)
+            off = {ref: why for ref, (action, why) in verdicts.items() if action == Action.DROP}
+            held = len(items) - len(kept) - len(off)
             await self.say(
-                f"대화 {len(items)}건이 마지막 말에 맞게 답했나?\n"
-                f"맞음 {len(fits)} · 다름 {len(off)} · 모름 {held}"
+                f"대화 {len(items)}건 · {ask}\n{labels[0]} {len(kept)} · {labels[1]} {len(off)} · 모름 {held}"
             )
             state.facts["changed"] += await self._record(
-                state.key, Action.KEEP, fits, tool="llm:fits"
+                state.key, Action.KEEP, kept, tool=f"llm:{field}"
             )
             state.facts["changed"] += await self._record(
                 state.key,
                 Action.DROP,
                 [refs[ref].prompt.id for ref in off],
-                tool="llm:fits",
+                tool=f"llm:{field}",
                 # 빼는 까닭을 보기로 (지시는 대화 패널에서 본다)
                 samples=[why or _sample(refs[ref]) for ref, why in off.items()],
             )
-            if held:
-                await helper_service.add_usage(self.db, run_id=self.run_id, held=held)
-                await self.db.commit()
-                state.facts["held"] += held
+            await self._hold(state, held)
         return used
 
-    async def _conversation_brief(self, state: StepState) -> str:
-        """LLM에 보일 남은 대화들 (ref를 매긴다)."""
-        ids = await self._candidates(state.key)
-        items = await conversations.items_of(
-            self.db, dataset_id=self.dataset_id, ids=ids[:REVIEW_LIMIT]
-        )
-        confirmed = set(
-            await conversations.open_ids(self.db, dataset_id=self.dataset_id, check=state.key)
-        )
-        lines = [f"남은 문제: {CHECK_NAMES[state.key]} · {len(ids):,}건", "보기:"]
-        for index, item in enumerate(items, start=1):
-            ref = f"r{index}"
-            state.refs[ref] = item.prompt.id
-            lines.append(_conversation_line(ref, item, suspect=item.prompt.id not in confirmed))
-        if len(ids) > len(items):
-            lines.append(f"(보이지 않은 {len(ids) - len(items):,}건은 사람이 본다)")
-        return "\n".join(lines)
+    async def _judge_pairs(self, state: StepState) -> int:
+        """판정 반대 쌍을 LLM이 견준다: 두 응답을 '응답 1 · 2'로만 보이고 순서를 바꿔 두 번 묻는다.
 
-    async def _pair_brief(self, state: StepState) -> str:
-        """LLM에 보일 남은 쌍들: 지시 · 고른 응답 · 버린 응답 · Jev 따름 점수 (ref를 매긴다)."""
-        ids = await conversations.open_ids(self.db, dataset_id=self.dataset_id, check=state.key)
-        shown = ids[:REVIEW_LIMIT]
-        pairs = list(
-            (await self.db.scalars(select(Pair).where(Pair.id.in_(shown)).order_by(Pair.id))).all()
-        )
-        answer_ids = [pair.chosen_id for pair in pairs] + [pair.rejected_id for pair in pairs]
-        answers = {
-            answer.id: answer.content
-            for answer in (
-                await self.db.scalars(select(Response).where(Response.id.in_(answer_ids)))
-            ).all()
-        }
-        contexts = await making.contexts(self.db, ids=[pair.prompt_id for pair in pairs])
-        lines = [f"남은 문제: {CHECK_NAMES[state.key]} · {len(ids):,}쌍", "보기:"]
-        for index, pair in enumerate(pairs, start=1):
-            ref = f"r{index}"
-            state.refs[ref] = pair.id
-            instruction = _last_user(contexts.get(pair.prompt_id, []))[:INSTRUCTION_PREVIEW]
-            chosen = answers.get(pair.chosen_id, "")[:RESPONSE_PREVIEW]
-            rejected = answers.get(pair.rejected_id, "")[:RESPONSE_PREVIEW]
-            lines.append(
-                f'{ref} 지시 "{instruction}"\n   고른 응답 "{chosen}"\n   버린 응답 "{rejected}"'
-                f"\n   Jev 따름 고른 {pair.judge_chosen or 0:.2f} · 버린 {pair.judge_rejected or 0:.2f}"
+        두 번 모두 버린 응답이 나으면 뒤집고, 모두 고른 응답이면 그대로 두고, 모두 둘 다 나쁨 · 가를 수 없음이면
+        쌍을 빼고, 두 번이 갈리거나 답을 읽지 못하면 사람에게 넘긴다(LLM 판정자는 앞뒤 자리에 끌린다). 쓴 토큰.
+        """
+        ids = (await conversations.open_ids(self.db, dataset_id=self.dataset_id, check=state.key))[
+            :MAX_VERDICTS
+        ]
+        used = 0
+        for start in range(0, len(ids), VERDICT_BATCH):
+            await self.check_stop()
+            pairs = list(
+                (
+                    await self.db.scalars(
+                        select(Pair)
+                        .where(Pair.id.in_(ids[start : start + VERDICT_BATCH]))
+                        .order_by(Pair.id)
+                    )
+                ).all()
             )
-        if len(ids) > len(pairs):
-            lines.append(f"(보이지 않은 {len(ids) - len(pairs):,}쌍은 사람이 본다)")
-        return "\n".join(lines)
+            if not pairs:
+                continue
+            texts = {
+                answer.id: answer.content
+                for answer in (
+                    await self.db.scalars(
+                        select(Response).where(
+                            Response.id.in_(
+                                [p.chosen_id for p in pairs] + [p.rejected_id for p in pairs]
+                            )
+                        )
+                    )
+                ).all()
+            }
+            contexts = await making.contexts(self.db, ids=[pair.prompt_id for pair in pairs])
+            refs = {f"r{index}": pair for index, pair in enumerate(pairs, start=1)}
+            votes: dict[str, list[str]] = defaultdict(list)
+            for swapped in (False, True):
+                lines = []
+                for ref, pair in refs.items():
+                    chosen, rejected = (
+                        texts.get(pair.chosen_id, ""),
+                        texts.get(pair.rejected_id, ""),
+                    )
+                    first, second = (rejected, chosen) if swapped else (chosen, rejected)
+                    lines.append(_pair_line(ref, contexts.get(pair.prompt_id, []), first, second))
+                reply = await self.chat(
+                    [
+                        ChatMessage(role="system", content=PREFER_SYSTEM),
+                        ChatMessage(role="user", content="\n\n".join(lines)),
+                    ],
+                    [],
+                    max_tokens=VERDICT_MAX_TOKENS,
+                )
+                used += reply.input_tokens + reply.output_tokens
+                order = (
+                    {"1": "rejected", "2": "chosen"}
+                    if swapped
+                    else {"1": "chosen", "2": "rejected"}
+                )
+                for ref, (better, _why) in _read_verdicts(reply.content, field="better").items():
+                    if ref in refs:
+                        votes[ref].append(order.get(better) or PREFER_VOTES.get(better, ""))
+            decided: dict[Action, list[int]] = defaultdict(list)
+            for ref, pair in refs.items():
+                both = votes.get(ref, [])
+                agreed = len(both) == 2 and both[0] == both[1]
+                action = {"rejected": Action.FLIP, "chosen": Action.KEEP, "drop": Action.DROP}.get(
+                    both[0] if agreed else ""
+                )
+                if action is not None:
+                    decided[action].append(pair.id)
+            held = len(refs) - sum(len(found) for found in decided.values())
+            await self.say(
+                f"쌍 {len(refs)}개의 고른 응답이 정말 나은가? (순서를 바꿔 두 번)\n"
+                f"그대로 {len(decided[Action.KEEP])} · 뒤집기 {len(decided[Action.FLIP])} · "
+                f"쌍 빼기 {len(decided[Action.DROP])} · 모름 {held}"
+            )
+            for action in (Action.KEEP, Action.FLIP, Action.DROP):
+                state.facts["changed"] += await self._record_pairs(
+                    state.key, action, decided[action], tool="llm:prefer"
+                )
+            await self._hold(state, held)
+        return used
+
+    async def _hold(self, state: StepState, held: int) -> None:
+        """LLM이 정하지 못해 사람에게 넘긴 수를 실행의 보류에 더한다."""
+        if held:
+            await helper_service.add_usage(self.db, run_id=self.run_id, held=held)
+            await self.db.commit()
+            state.facts["held"] += held
 
     async def _candidates(self, check: CheckKey) -> list[int]:
         """LLM이 볼 대화: 남은 문제, 지시 불일치면 Jev가 애매하게 본 의심도(확인된 것이 앞)."""
@@ -936,98 +1053,14 @@ class Helper(Agent):
         ).all()
         return ids + [i for i in suspects if i not in confirmed]
 
-    def _judge_tools(self, state: StepState) -> Tools:
-        """판단 도구: keep · drop · hold (쌍이면 flip도) · finish_step."""
-        is_pair = CHECKS[state.key].unit == "pair"
-        refs = {
-            "refs": {"type": "array", "items": {"type": "string"}, "description": "r1 같은 ref들"}
-        }
-        # 빼기는 데이터를 바꾸는 판단이라 한 건씩 까닭과 함께 부르게 한다(여러 건을 한 까닭으로 묶어 빼던 일을 막는다).
-        one_ref = {
-            "ref": {"type": "string", "description": "r1 같은 ref 하나"},
-            "reason": {"type": "string", "description": "이 대화를 빼는 까닭 한 줄"},
-        }
-
-        def handler(action: Action | None) -> agent_service.ToolHandler:
-            async def handle(arguments: dict[str, Any], _tokens: int) -> dict[str, Any]:
-                # drop은 한 번에 하나(ref)라 refs가 없으면 ref를 쓴다.
-                asked = arguments.get("refs") or [arguments.get("ref")]
-                ids = [state.refs[ref] for ref in asked if ref in state.refs]
-                if action is None:
-                    await helper_service.add_usage(self.db, run_id=self.run_id, held=len(ids))
-                    await self.db.commit()
-                    state.facts["held"] += len(ids)
-                    return {"보류": len(ids)}
-                if is_pair:
-                    allowed = set(
-                        await conversations.open_ids(
-                            self.db, dataset_id=self.dataset_id, check=state.key
-                        )
-                    )
-                    changed = await self._record_pairs(
-                        state.key,
-                        action,
-                        [i for i in ids if i in allowed],
-                        tool=f"llm:{action.value}",
-                    )
-                else:
-                    allowed = set(await self._candidates(state.key))
-                    changed = await self._record(
-                        state.key,
-                        action,
-                        [i for i in ids if i in allowed],
-                        tool=f"llm:{action.value}",
-                    )
-                state.facts["changed"] += changed
-                return {"바꿈": changed, "남은 수": await self._count(state.key)}
-
-            return handle
-
-        async def finish(_arguments: dict[str, Any], _tokens: int) -> dict[str, Any]:
-            return {"끝": True}
-
-        what = "쌍을" if is_pair else "대화를"
-        tools: Tools = {
-            "keep": (
-                agent_tool(
-                    "keep", "문제 아님: 그대로 둔다(이 검사로 다시 묻지 않는다).", refs, ["refs"]
-                ),
-                handler(Action.KEEP),
-            ),
-            "drop": (
-                agent_tool(
-                    "drop",
-                    f"{what} 학습에서 뺀다(되돌릴 수 있다). 한 번에 하나만, 왜 빼는지 그 대화에 맞는 까닭과 함께.",
-                    one_ref,
-                    ["ref", "reason"],
-                ),
-                handler(Action.DROP),
-            ),
-            "hold": (
-                agent_tool("hold", "판단이 갈려 사람에게 넘긴다(바꾸지 않는다).", refs, ["refs"]),
-                handler(None),
-            ),
-            agent_service.FINISH_STEP_TOOL: (
-                agent_tool(agent_service.FINISH_STEP_TOOL, "이 단계를 끝낸다.", {}, []),
-                finish,
-            ),
-        }
-        if is_pair:
-            tools["flip"] = (
-                agent_tool(
-                    "flip", "고른 응답과 버린 응답을 바꾼다(버린 응답이 더 낫다).", refs, ["refs"]
-                ),
-                handler(Action.FLIP),
-            )
-        return tools
-
     # ----- 허락 -----
 
     async def _ask_permission(self, step: StepDef, count: int) -> None:
         """허락 단계: 시험으로 몇 건 만들어 보고(넣지 않음) 계획 · 비용을 보인 뒤 실행을 asking으로 둔다."""
         self.update_step(step.key, status=STEP_ASK, plan=f"{count:,}건")
         await self.save_steps()
-        model = self.llm_connection.model
+        writer = self._pair_writer() if step.key != ANSWER_KEY else self.llm_connection
+        model = writer.model
         trial = await self._trial(step)
         each = trial.tokens / trial.tried if trial.tried else making.TOKENS_EACH_ESTIMATE
         doing = min(count, making.MAX_PROMPTS_PER_RUN)
@@ -1052,13 +1085,22 @@ class Helper(Agent):
                 ["되돌리기", "카드마다 · 실행 전체"],
             ]
         else:
+            by_target = self.target_connection is not None
             await self.say(
-                f"쌍이 없는 지시에 비교를 만들까?\n지시 {count:,}개. LLM이 다른 응답을 하나 더 쓰고, "
-                "Jev가 두 응답을 따로 본 점수로 고른 응답을 정한다."
+                f"쌍이 없는 지시에 비교를 만들까?\n지시 {count:,}개. "
+                + ("학습할 모델이 대화에 그대로 답한 응답" if by_target else "LLM이 다른 응답")
+                + "을 하나 더 쓰고, Jev가 두 응답을 따로 본 점수로 고른 응답을 정한다."
             )
             facts = [
                 ["대상", f"쌍 없는 지시 {count:,}{this_run}"],
-                ["만들기", "다른 구성의 응답 하나 · 출처 합성"],
+                [
+                    "만들기",
+                    (
+                        "학습할 모델의 응답 하나 · 지침 없이 대화 그대로 · 출처 합성"
+                        if by_target
+                        else "다른 구성의 응답 하나 · 출처 합성"
+                    ),
+                ],
                 ["고르기", "Jev 따름이 높은 쪽이 고른 응답 · 응답마다 따로 물음"],
                 [
                     "시험",
@@ -1151,16 +1193,24 @@ class Helper(Agent):
             transport=self.transport,
         )
 
+    def _pair_writer(self) -> Connection:
+        """비교 만들기의 응답을 쓰는 연결: 학습할 모델이 있으면 그것, 없으면 LLM."""
+        return self.target_connection or self.llm_connection
+
     async def _compare(self, ids: list[int]) -> list[making.Made]:
-        """지시들에 견줄 응답을 쓰고 Jev가 두 응답을 따로 본 점수를 붙인다(넣지 않는다)."""
+        """지시들에 견줄 응답을 쓰고 Jev가 두 응답을 따로 본 점수를 붙인다(넣지 않는다).
+
+        학습할 모델이 있으면 그 모델이 대화에 그대로 답한 응답, 없으면 LLM이 주 응답과 다르게 쓴 응답이다.
+        """
         if self.jev_connection is None:
             return []
         found = await making.contexts(self.db, ids=ids)
         mains = await making.main_answers(self.db, ids=ids)
         targets = [i for i in ids if i in found and i in mains]
         made = await making.write_answers(
-            self.llm_connection,
+            self._pair_writer(),
             [(i, found[i], mains[i].content) for i in targets],
+            as_policy=self.target_connection is not None,
             transport=self.transport,
         )
         return await making.judge_pairs(
@@ -1261,7 +1311,10 @@ class Helper(Agent):
         }
         mains = await making.main_answers(self.db, ids=ids)
         event = await self._change_event(
-            Action.PAIR, len(done), tool="llm+jev:pair", samples=[i.text or "" for i in done]
+            Action.PAIR,
+            len(done),
+            tool="target+jev:pair" if self.target_connection else "llm+jev:pair",
+            samples=[i.text or "" for i in done],
         )
         added = 0
         for item in done:
@@ -1349,7 +1402,7 @@ class Helper(Agent):
                     facts["rule"] += await self._apply_rule(check, "jev_keep", tool="fix:jev_keep")
                 if await self._count(check):
                     state = StepState(key=check)
-                    facts["llm"] += await self._judge(state, goal=JUDGE_GOALS[check])
+                    facts["llm"] += await self._judge(state)
                     facts.update({k: v for k, v in state.facts.items() if v})
                 return dict(facts)
             if spec.how == "rewrite":
@@ -1659,8 +1712,20 @@ def _verdict_line(ref: str, item: conversations.ConversationItem) -> str:
     return f"{ref}\n{body}\n   마지막 응답: {answer[:VERDICT_ANSWER_CHARS]}"
 
 
-def _read_verdicts(reply: str) -> dict[str, tuple[str, str]]:
-    """LLM 판정 답(JSON 목록)을 {ref: (fits, why)}로. 읽을 수 없으면 빈 사전(모두 사람에게)."""
+def _pair_line(ref: str, messages: list[dict[str, Any]], first: str, second: str) -> str:
+    """견주기에 보일 쌍 한 건: 최근 턴들(역할: 글)과 두 응답(응답 1 · 2). 고른 · 버린과 Jev 점수는 보이지 않는다."""
+    turns = [m for m in messages if m["role"] in VERDICT_ROLES][-VERDICT_TURNS:]
+    body = "\n".join(
+        f"   {VERDICT_ROLES[m['role']]}: {m['content'][:VERDICT_TURN_CHARS]}" for m in turns
+    )
+    return (
+        f"{ref}\n{body}\n   응답 1: {first[:VERDICT_ANSWER_CHARS]}"
+        f"\n   응답 2: {second[:VERDICT_ANSWER_CHARS]}"
+    )
+
+
+def _read_verdicts(reply: str, *, field: str) -> dict[str, tuple[str, str]]:
+    """LLM 판정 답(JSON 목록)을 {ref: (field의 값, why)}로. 읽을 수 없으면 빈 사전(모두 사람에게)."""
     start, end = reply.find("["), reply.rfind("]")
     if start < 0 or end <= start:
         return {}
@@ -1671,33 +1736,8 @@ def _read_verdicts(reply: str) -> dict[str, tuple[str, str]]:
     verdicts: dict[str, tuple[str, str]] = {}
     for row in rows if isinstance(rows, list) else []:
         if isinstance(row, dict) and isinstance(row.get("ref"), str):
-            verdicts[row["ref"]] = (str(row.get("fits", "")).lower(), str(row.get("why", "")))
+            verdicts[row["ref"]] = (str(row.get(field, "")).lower(), str(row.get("why", "")))
     return verdicts
-
-
-def _conversation_line(ref: str, item: conversations.ConversationItem, *, suspect: bool) -> str:
-    """LLM에 보일 대화 한 건: 앞 턴(여러 턴이면 최근 몇 개를 순서대로) · 마지막 지시 · 응답 앞부분 · Jev 점수 · 의심 표시."""
-    judgment = item.judgment
-    jev = ""
-    if judgment is not None:
-        if judgment.follows is not None:
-            jev += f" · Jev 따름 {judgment.follows:.2f}"
-        if judgment.refusal_ok is not None:
-            jev += f" · Jev 마땅한 거절 {judgment.refusal_ok:.2f}"
-        if judgment.unsafe is not None:
-            jev += f" · Jev 해로움 {judgment.unsafe:.2f}"
-    context = [m for m in item.prompt.messages if m["role"] in (Role.USER, Role.ASSISTANT)]
-    last_user = next((m["content"] for m in reversed(context) if m["role"] == Role.USER), "")
-    # 마지막 지시 앞의 턴들을 순서대로 (앞 턴을 잇는 말을 LLM이 읽을 수 있게)
-    before = context[:-1][-EARLIER_TURNS:] if context else []
-    earlier = "".join(
-        f'\n   앞 {ROLE_WORDS[m["role"]]} "{m["content"][:EARLIER_PREVIEW]}"' for m in before
-    )
-    instruction = last_user[:INSTRUCTION_PREVIEW]
-    answer = (item.answer.content if item.answer else "(응답 없음)")[:RESPONSE_PREVIEW]
-    tag = " · 의심" if suspect else ""
-    head = f"{ref} 대화" + (f" · 앞 턴 {len(before)}" if before else "")
-    return f'{head}{earlier}\n   지시 "{instruction}"\n   응답 "{answer}"{jev}{tag}'
 
 
 async def run_helper(
@@ -1726,6 +1766,7 @@ async def run_helper(
         jev_connection: Connection | None = await connections.get_connection(
             db, role=ConnectionRole.JEV
         )
+        target_connection = await connections.get_connection(db, role=ConnectionRole.TARGET)
         helper = Helper(
             db,
             run=run,
@@ -1734,6 +1775,11 @@ async def run_helper(
             transport=transport,
             jev_transport=jev_transport,
             total=await _active_count(db, dataset_id=run.dataset_id),
+            target_connection=(
+                target_connection
+                if target_connection is not None and target_connection.model
+                else None
+            ),
         )
         await helper.run(
             resume=resume,

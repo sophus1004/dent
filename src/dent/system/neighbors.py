@@ -1,4 +1,5 @@
 """가까운 벡터 찾기: 벡터마다 코사인 유사도가 가장 큰 이웃 k개(자기 자신은 뺀다). 모듈 종류와 상관없이 쓴다.
+다른 벡터 묶음에서 찾기(nearest_in, 학습 글마다 가까운 평가 문항)도 같은 방식이다.
 
 뜻 분석(근접 중복 · 오라벨 의심)의 바탕이다. 정확한 계산을 묶음으로 나눠 한다:
 벡터 묶음 × 전체 벡터의 행렬 곱으로 유사도를 구하고, 줄마다 위 k개만 남긴다.
@@ -42,6 +43,28 @@ def nearest_neighbors(vectors: np.ndarray, *, k: int) -> Neighbors:
         # 자기 자신은 이웃이 아니다.
         block[np.arange(end - start), np.arange(start, end)] = -np.inf
         # 위 k개만 고른 뒤(순서 없음) 그 안에서 큰 것부터 줄 세운다. 전체 정렬보다 훨씬 빠르다.
+        top = np.argpartition(-block, k - 1, axis=1)[:, :k]
+        top_similarities = np.take_along_axis(block, top, axis=1)
+        order = np.argsort(-top_similarities, axis=1, kind="stable")
+        indices[start:end] = np.take_along_axis(top, order, axis=1)
+        similarities[start:end] = np.take_along_axis(top_similarities, order, axis=1)
+    return Neighbors(indices=indices, similarities=similarities)
+
+
+def nearest_in(queries: np.ndarray, targets: np.ndarray, *, k: int) -> Neighbors:
+    """queries의 벡터마다 targets에서 코사인 유사도가 가장 큰 k개. targets가 k개 이하면 있는 만큼."""
+    count = len(queries)
+    k = min(k, len(targets))
+    if k == 0 or count == 0:
+        empty = np.zeros((count, 0))
+        return Neighbors(indices=empty.astype(np.int64), similarities=empty.astype(np.float32))
+    unit_queries = _normalized(queries)
+    unit_targets = _normalized(targets)
+    indices = np.empty((count, k), dtype=np.int64)
+    similarities = np.empty((count, k), dtype=np.float32)
+    for start in range(0, count, NEIGHBOR_BLOCK_ROWS):
+        end = min(start + NEIGHBOR_BLOCK_ROWS, count)
+        block = unit_queries[start:end] @ unit_targets.T
         top = np.argpartition(-block, k - 1, axis=1)[:, :k]
         top_similarities = np.take_along_axis(block, top, axis=1)
         order = np.argsort(-top_similarities, axis=1, kind="stable")

@@ -2,18 +2,20 @@
 
 파일 모양
 - train_jsonl: bge-m3(FlagEmbedding) 학습 줄 {"query", "pos": [...], "neg": [...]} (+ "pos_scores", "neg_scores")
-  · 출처 칸 "source"(학습기는 모르는 칸을 읽지 않는다).
+  · 출처 칸 "source" · 묶음 칸 "group"(학습기는 모르는 칸을 읽지 않는다).
   오답은 풀 전체를 넣는다(학습기가 매 에폭 train_group_size - 1개를 무작위로 고른다).
 - train_table: sentence-transformers 표(csv) anchor · positive · negative_1 … negative_n (정답마다 한 줄, 가장 하드한 n개)
-  · 출처 칸 source(고를 수 있다. sentence-transformers에 바로 넣을 때는 이 칸을 빼고 넣는다).
-- beir: zip — corpus.jsonl · queries.jsonl(metadata.source) · qrels/test.tsv(모든 질의).
-  정답의 중복 묶음(같은 본문 · 근접 중복)도 정답으로 넣는다(같은 내용을 가져와도 맞은 것으로).
+  · 출처 칸 source · 묶음 칸 group(고를 수 있다. sentence-transformers에 바로 넣을 때는 이 칸들을 빼고 넣는다).
+- beir: zip — corpus.jsonl · queries.jsonl(metadata.source · group) · qrels/test.tsv(모든 질의).
+  정답의 중복 묶음(같은 본문 · 근접 중복)도 정답으로 넣는다(같은 내용을 가져와도 맞은 것으로, qrels_groups로 끈다).
 - corpus: 운영 색인에 넣을 zip — corpus.jsonl(학습 글) · rules.json(머리말 규칙 · 뗀 반복 구간).
   학습 글과 색인 글이 같아야 해서, 학습 파일과 같은 규칙으로 만든 글과 그 규칙을 함께 낸다.
 문서 글은 모두 학습 글(머리말 + 떼기로 고른 구간을 뺀 본문)이다. BEIR은 title을 비우고 text에 학습 글을 둔다
 (평가 도구가 제목을 두 번 붙이지 않게).
 train · valid · test로 나누지 않는다. 학습에 쓰는 질의(학습 제외 · 휴지통 뺌)를 모두 넣고, 출처(original · synthetic · human)
-칸으로 AI가 만든 질의를 가를 수 있게 한다.
+칸으로 AI가 만든 질의를 가를 수 있게 한다. 묶음 칸 "group"(학습 jsonl · 학습 표의 출처 칸과 함께 · BEIR metadata)은
+정답 문서가 같은 원문(같은 본문 · 근접 중복 묶음 · 나누기 전 원문)에서 나왔거나 근접 중복인 질의들의 대표 번호
+(가장 작은 질의 번호)다. 받은 쪽이 묶음 단위로 나누면 같은 원문으로 만든 질의가 학습 · 평가 양쪽에 들어가지 않는다.
 넣을 출처(원본 · 찾기 · 합성 · 도우미 · 사람)의 판정만 쓴다. 오답은 기준 검색에서 가까운 것(하드)부터.
 교사 점수(기본 켬)는 판정의 Jev 확률을 로짓(log p/(1-p))으로 넣고, 없는 것은 Jev에 물어 채운다(Jev가 없으면 실패).
 FlagEmbedding은 교사 점수에 온도 없이 softmax를 씌우므로 0~1 확률을 그대로 넣으면 목표가 거의 평평해진다.
@@ -43,7 +45,9 @@ from dent.modules.retrieval import service as retrieval_service
 from dent.modules.retrieval.models import (
     POSITIVE_MIN_GRADE,
     Document,
+    ItemKind,
     Judgment,
+    NearDuplicate,
     Query,
     Ranking,
     Repeat,
@@ -55,6 +59,7 @@ from dent.modules.retrieval.text_rules import HEADER_SEPARATOR
 from dent.system import connections, jobs
 from dent.system import exports as exports_service
 from dent.system.exceptions import ConflictError, InvalidInputError
+from dent.system.groups import Groups
 from dent.system.models import ConnectionRole, Export, Job, JobStatus
 
 # 파일 모양별 파일 이름 끝
@@ -100,6 +105,8 @@ NO_JEV_MESSAGE = "교사 점수를 넣으려면 Jev를 연결하세요."
 NO_TRAIN_MESSAGE = "내보낼 질의가 없습니다."
 # 출처 칸 이름 (학습 jsonl · 학습 표 · BEIR queries의 metadata)
 SOURCE_COLUMN = "source"
+# 묶음 칸 이름 (같은 원문에서 나온 질의들의 대표 번호)
+GROUP_COLUMN = "group"
 
 
 @dataclass
@@ -116,8 +123,11 @@ class Pack:
     # 문서 번호 → 학습 글
     documents: dict[int, str] = field(default_factory=dict)
 
-    # 문서 번호 → 중복 묶음 대표 (평가 파일을 만들 때만)
+    # 문서 번호 → 중복 묶음 대표
     group_of: dict[int, int] = field(default_factory=dict)
+
+    # 질의 번호 → 묶음 대표 (같은 원문에서 나온 정답 · 근접 중복으로 이어진 질의들)
+    query_group: dict[int, int] = field(default_factory=dict)
 
     def query_ids(self) -> list[int]:
         """정답이 있는 질의 번호 (번호 순)."""
@@ -249,7 +259,7 @@ async def build_export(
     elif export.format == "train_table":
         result = _write_table(pack, path=path, data=data)
     else:
-        result = _write_beir(pack, path=path)
+        result = _write_beir(pack, path=path, with_groups=data.qrels_groups)
     await exports_service.finish_export(db, export, job_id=job_id, result=result)
     await db.commit()
 
@@ -308,9 +318,47 @@ async def _collect(db: AsyncSession, *, dataset_id: int, data: ExportCreate) -> 
         query = query.where(Document.id.in_(used or {-1}))
     for document_id, text in await db.execute(query):
         pack.documents[document_id] = text
-    if has_beir:
-        pack.group_of = await retrieval_service.duplicate_groups(db, dataset_id=dataset_id)
+    pack.group_of = await retrieval_service.duplicate_groups(db, dataset_id=dataset_id)
+    pack.query_group = await _query_groups(db, dataset_id=dataset_id, pack=pack)
     return pack
+
+
+async def _query_groups(db: AsyncSession, *, dataset_id: int, pack: Pack) -> dict[int, int]:
+    """내보낼 질의마다 묶음 대표 번호. 정답 문서의 중복 묶음이나 나누기 전 원문이 같으면,
+    또는 가장 최근 뜻 분석의 근접 중복 질의면 한 묶음이다(이어진 것도)."""
+    grouped = Groups[int](pack.queries)
+    positive_docs = {doc for items in pack.positives.values() for doc, _g, _t in items}
+    origin_of = dict(
+        (
+            await db.execute(
+                select(Document.id, Document.source_document_id).where(
+                    Document.id.in_(positive_docs or {-1}),
+                    Document.source_document_id.is_not(None),
+                )
+            )
+        ).all()
+    )
+    # 원문(문서 번호)마다 처음 본 질의 (뒤에 같은 원문을 가진 질의를 그 질의에 잇는다).
+    # 정답 문서의 원문은 그 중복 묶음의 대표와, 청크면 나누기 전 원문이다(원문 자체를 정답으로 둔 질의와도 잇는다).
+    first_of: dict[int, int] = {}
+    for query_id in pack.query_ids():
+        for doc, _g, _t in pack.positives[query_id]:
+            origins = {pack.group_of.get(doc, doc)}
+            if doc in origin_of:
+                origins.add(origin_of[doc])
+            for origin in origins:
+                grouped.union(first_of.setdefault(origin, query_id), query_id)
+    analysis = await retrieval_service.latest_done_analysis(db, dataset_id=dataset_id)
+    if analysis is not None:
+        for item_a, item_b in await db.execute(
+            select(NearDuplicate.item_a, NearDuplicate.item_b).where(
+                NearDuplicate.analysis_id == analysis.id,
+                NearDuplicate.kind == ItemKind.QUERY.value,
+            )
+        ):
+            if item_a in pack.queries and item_b in pack.queries:
+                grouped.union(item_a, item_b)
+    return grouped.representatives()
 
 
 async def _fill_teacher_scores(
@@ -427,6 +475,7 @@ def _train_line(pack: Pack, query_id: int, *, data: ExportCreate) -> dict[str, A
             round(teacher_logit(t), 4) if t is not None else None for _d, t in negatives
         ]
     line[SOURCE_COLUMN] = pack.queries[query_id][1]
+    line[GROUP_COLUMN] = pack.query_group.get(query_id, query_id)
     return line
 
 
@@ -448,7 +497,7 @@ def _write_table(pack: Pack, *, path: Any, data: ExportCreate) -> dict[str, Any]
     counts = {"queries": 0, "rows": 0}
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.writer(file)
-        source_head = [SOURCE_COLUMN] if data.source_column else []
+        source_head = [SOURCE_COLUMN, GROUP_COLUMN] if data.source_column else []
         writer.writerow(
             [
                 "anchor",
@@ -463,7 +512,8 @@ def _write_table(pack: Pack, *, path: Any, data: ExportCreate) -> dict[str, Any]
                 pack.documents[doc] for doc, _t in pack.negatives.get(query_id, [])[:wanted]
             ]
             negatives += [""] * (wanted - len(negatives))
-            source_cell = [source] if data.source_column else []
+            group = pack.query_group.get(query_id, query_id)
+            source_cell = [source, group] if data.source_column else []
             for doc, _g, _t in pack.positives.get(query_id, []):
                 writer.writerow([text, pack.documents[doc], *negatives, *source_cell])
                 counts["rows"] += 1
@@ -471,11 +521,12 @@ def _write_table(pack: Pack, *, path: Any, data: ExportCreate) -> dict[str, Any]
     return counts
 
 
-def _write_beir(pack: Pack, *, path: Any) -> dict[str, Any]:
+def _write_beir(pack: Pack, *, path: Any, with_groups: bool) -> dict[str, Any]:
     query_ids = pack.query_ids()
     members: dict[int, list[int]] = {}
-    for document_id in pack.documents:
-        members.setdefault(pack.group_of.get(document_id, document_id), []).append(document_id)
+    if with_groups:
+        for document_id in pack.documents:
+            members.setdefault(pack.group_of.get(document_id, document_id), []).append(document_id)
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         corpus = io.StringIO()
         for document_id, text in pack.documents.items():
@@ -488,7 +539,11 @@ def _write_beir(pack: Pack, *, path: Any) -> dict[str, Any]:
         queries = io.StringIO()
         for query_id in query_ids:
             text, source = pack.queries[query_id]
-            line = {"_id": str(query_id), "text": text, "metadata": {SOURCE_COLUMN: source}}
+            metadata = {
+                SOURCE_COLUMN: source,
+                GROUP_COLUMN: pack.query_group.get(query_id, query_id),
+            }
+            line = {"_id": str(query_id), "text": text, "metadata": metadata}
             queries.write(json.dumps(line, ensure_ascii=False) + "\n")
         archive.writestr("queries.jsonl", queries.getvalue())
         # train · valid · test로 나누지 않으므로 모든 질의를 BEIR의 기본 이름(test) 하나에 둔다
@@ -496,7 +551,7 @@ def _write_beir(pack: Pack, *, path: Any) -> dict[str, Any]:
         for query_id in query_ids:
             grades: dict[int, int] = {}
             for doc, grade, _t in pack.positives.get(query_id, []):
-                # 정답의 중복 묶음도 같은 등급의 정답으로 (같은 내용을 가져와도 맞은 것)
+                # 정답의 중복 묶음도 같은 등급의 정답으로 (같은 내용을 가져와도 맞은 것). 끄면 판정한 문서만.
                 for member in members.get(pack.group_of.get(doc, doc), [doc]):
                     grades[member] = max(grades.get(member, 0), grade)
             for doc, grade in sorted(grades.items()):

@@ -17,6 +17,8 @@ from dent.system.agent import BLOCKED_MESSAGE
 from dent.system.models import HelperEvent, Job
 from tests.modules.generation.helpers import (
     CLEAN,
+    TARGET_MODEL,
+    UNSAFE_MARK,
     connect_models,
     conversation,
     import_file,
@@ -73,14 +75,19 @@ def _message(content: str, tool_calls: list[dict[str, Any]] | None = None) -> ht
     )
 
 
-def fake_llm(*, echo: bool = False) -> httpx.MockTransport:
-    """가짜 LLM (OpenAI 모양). 단계는 '지금 단계: … (열쇠)'로 알아본다:
-    짧은 응답은 보기를 모두 빼고, 거절은 그대로 둔다. 도구 결과를 받으면 finish_step.
-    도구 없는 요청: 보고는 두 줄, 지시 불일치 판정은 마지막 응답에 '엉뚱'이 있으면 no · 없으면 yes(JSON),
+def fake_llm(*, echo: bool = False, prefer: str = "content") -> httpx.MockTransport:
+    """가짜 LLM (OpenAI 모양).
+
+    계획은 plan 도구를 부른다(echo면 say를 답 본문에도 빈 줄로 띄워 넣는다: 실제 LLM이 그랬다). 도구 없는 요청은
+    지시로 알아본다: 보고는 두 줄, 지시 불일치 판정은 마지막 응답에 '엉뚱'이 있으면 no · 없으면 yes,
+    남김 · 뺌 판정은 짧은 응답이면 모두 drop · 거절이면 모두 keep · 안전이면 UNSAFE_MARK가 있으면 drop,
+    쌍 견주기는 prefer가 content면 '엉뚱'이 없는 응답을, 아니면 늘 그 자리(예: "2")를 고른다,
     다시 쓰기 · 응답 만들기는 REWRITTEN.
-    echo면 판단 도구의 say를 답 본문에도 빈 줄로 띄워 넣는다(실제 LLM이 그랬다).
     """
     requests: list[dict[str, Any]] = []
+
+    def blocks(user: str) -> list[str]:
+        return re.split(r"\n\n(?=r\d+\n)", user)
 
     def reply(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -88,39 +95,54 @@ def fake_llm(*, echo: bool = False) -> httpx.MockTransport:
         tools = {tool["function"]["name"] for tool in body.get("tools") or []}
         system = body["messages"][0]["content"]
         user = body["messages"][-1]["content"]
-        if not tools:
-            if "보고를 두 줄로" in system:
-                return _message("무엇을 고쳤나?\n고칠 것은 고쳤다.")
-            if "마지막 사용자 말에 알맞은 답인지" in system:
-                blocks = re.split(r"\n\n(?=r\d+\n)", user)
-                verdicts = [
-                    {
-                        "ref": block.split("\n", 1)[0],
-                        "fits": "no" if "엉뚱" in block.split("마지막 응답:")[-1] else "yes",
-                        "why": "보기",
-                    }
-                    for block in blocks
-                ]
-                return _message(json.dumps(verdicts, ensure_ascii=False))
-            return _message(REWRITTEN)
         if "plan" in tools:
-            return _message("", [_call("plan", "무엇부터 고칠까?\n지시부터.")])
-        if any(message["role"] == "tool" for message in body["messages"]):
-            return _message("", [_call("finish_step", "다 했다.")])
-        found = re.search(r"지금 단계: .+ \((\w+)\)", system)
-        key = found.group(1) if found else ""
-        refs = re.findall(r"^(r\d+) ", user, flags=re.MULTILINE)
-        if key == "short":
-            say = "답이 엉뚱한가?\n뺀다."
-            content = say.replace("\n", "\n\n") if echo else ""
-            return _message(content, [_call("drop", say, refs=refs)])
-        if key == "mismatch":
-            say = "갈리나?\n사람이 본다."
-            content = say.replace("\n", "\n\n") if echo else ""
-            return _message(content, [_call("hold", say, refs=refs)])
-        if key == "refusal":
-            return _message("", [_call("keep", "마땅한가?\n둔다.", refs=refs)])
-        return _message("", [_call("finish_step", "끝.")])
+            say = "무엇부터 고칠까?\n지시부터."
+            return _message(say.replace("\n", "\n\n") if echo else "", [_call("plan", say)])
+        if "보고를 두 줄로" in system:
+            return _message("무엇을 고쳤나?\n고칠 것은 고쳤다.")
+        if "마지막 사용자 말에 알맞은 답인지" in system:
+            verdicts = [
+                {
+                    "ref": block.split("\n", 1)[0],
+                    "fits": "no" if "엉뚱" in block.split("마지막 응답:")[-1] else "yes",
+                    "why": "보기",
+                }
+                for block in blocks(user)
+            ]
+            return _message(json.dumps(verdicts, ensure_ascii=False))
+        if "마지막 응답을 학습에 남길지" in system:
+            verdicts = []
+            for block in blocks(user):
+                last = block.split("마지막 응답:")[-1]
+                if "아주 짧다" in system:
+                    decision = "drop"
+                elif "거절 문구" in system:
+                    decision = "keep"
+                elif "해로운 내용을 담았는지" in system:
+                    decision = "drop" if UNSAFE_MARK in last else "keep"
+                else:
+                    decision = "unsure"
+                verdicts.append(
+                    {"ref": block.split("\n", 1)[0], "decision": decision, "why": "보기"}
+                )
+            return _message(json.dumps(verdicts, ensure_ascii=False))
+        if "지시에 더 알맞은 응답을 고른다" in system:
+            verdicts = []
+            for block in blocks(user):
+                first, second = re.search(
+                    r"응답 1: (.*)\n   응답 2: (.*)", block, re.DOTALL
+                ).groups()
+                if prefer != "content":
+                    better = prefer
+                elif "엉뚱" in first and "엉뚱" not in second:
+                    better = "2"
+                elif "엉뚱" in second and "엉뚱" not in first:
+                    better = "1"
+                else:
+                    better = "tie"
+                verdicts.append({"ref": block.split("\n", 1)[0], "better": better, "why": "보기"})
+            return _message(json.dumps(verdicts, ensure_ascii=False))
+        return _message(REWRITTEN)
 
     transport = httpx.MockTransport(reply)
     transport.requests = requests  # type: ignore[attr-defined]
@@ -184,13 +206,17 @@ async def test_helper_runs_rules_first_then_llm_and_reports(client, db_session):
     assert {item["key"]: item["group"] for item in left}["truncated"] == "ai"
     assert "report" in kinds
     assert state["run"]["held"] == 0
-    # 판정에는 Jev 점수를 보이지 않는다(보이면 LLM이 끌려 맞는 답을 뺐다).
-    verdict_request = next(
+    # 판정에는 Jev의 점수 · 판단을 보이지 않는다(보이면 LLM이 끌려 맞는 답을 뺐다).
+    judged = [
         body
         for body in llm.requests
         if "마지막 사용자 말에 알맞은 답인지" in body["messages"][0]["content"]
-    )
-    assert "Jev" not in verdict_request["messages"][1]["content"]
+        or "마지막 응답을 학습에 남길지" in body["messages"][0]["content"]
+    ]
+    assert len(judged) >= 2
+    for body in judged:
+        assert "Jev" not in body["messages"][0]["content"] + body["messages"][1]["content"]
+        assert "의심" not in body["messages"][1]["content"]
     # 보고를 두 줄로 말하게 할 때 처음 · 끝을 더하지 않게 '처음 → 끝' 글로 준다.
     report_request = next(
         body for body in llm.requests if "보고를 두 줄로" in body["messages"][0]["content"]
@@ -200,7 +226,7 @@ async def test_helper_runs_rules_first_then_llm_and_reports(client, db_session):
 
 
 async def test_helper_writes_a_say_once_when_llm_echoes_it_with_blank_lines(client, db_session):
-    # 준비: LLM이 판단 도구의 say를 답 본문에도 빈 줄로 띄워 넣는다.
+    # 준비: LLM이 계획 도구의 say를 답 본문에도 빈 줄로 띄워 넣는다.
     dataset_id = await _dataset(db_session)
     await connect_models(db_session, llm=True)
     run_id = (await client.post(f"{API}/datasets/{dataset_id}/helper")).json()["id"]
@@ -208,15 +234,15 @@ async def test_helper_writes_a_say_once_when_llm_echoes_it_with_blank_lines(clie
     # 실행
     await _run_queued(db_session, dataset_id, llm=fake_llm(echo=True))
 
-    # 확인: 짧은 응답 단계의 말이 한 번씩만 적힌다.
+    # 확인: 계획의 말이 한 번씩만 적힌다.
     says = [
         event.payload["text"]
         for event in await db_session.scalars(
             select(HelperEvent).where(HelperEvent.run_id == run_id, HelperEvent.kind == "say")
         )
     ]
-    assert says.count("답이 엉뚱한가?") == 1
-    assert says.count("뺀다.") == 1
+    assert says.count("무엇부터 고칠까?") == 1
+    assert says.count("지시부터.") == 1
 
 
 async def test_gate_blocks_response_stage_when_instruction_stage_stays_bad(
@@ -412,6 +438,40 @@ async def test_pair_step_makes_judged_pairs_for_preference_goal(client, db_sessi
     assert _check(overview, "small_margin")["count"] == 2
 
 
+async def test_pair_step_asks_target_model_with_plain_conversation_when_connected(
+    client, db_session
+):
+    # 준비: 학습할 모델도 연결했다
+    rows = [conversation("감자 레시피를 알려줘", "감자를 삶아 으깹니다.")]
+    dataset_id = await _dataset(db_session, rows)
+    await connect_models(db_session, llm=True, target=True)
+    await client.patch(f"{API}/datasets/{dataset_id}/settings", json={"goal": "preference"})
+    llm = fake_llm()
+
+    # 실행
+    run_id = (await client.post(f"{API}/datasets/{dataset_id}/helper")).json()["id"]
+    await _run_queued(db_session, dataset_id, llm=llm)
+    asking = await _wait_permission(client, dataset_id)
+    await client.post(f"{API}/helper/{run_id}/permission", json={"approve": True})
+    await _run_queued(db_session, dataset_id, llm=llm)
+    pairs = (await db_session.scalars(select(Pair))).all()
+    asked = [
+        body
+        for body in llm.requests  # type: ignore[attr-defined]
+        if body["model"] == TARGET_MODEL
+    ]
+
+    # 확인: 비교 응답은 학습할 모델이 지침 없이 대화 그대로 받아 썼고(시험 · 본 만들기), 쌍이 들어갔다
+    facts = dict(asking["permission"]["facts"])
+    assert facts["만들기"].startswith("학습할 모델의 응답 하나")
+    assert TARGET_MODEL in facts["비용"]
+    assert asked
+    assert all(
+        body["messages"] == [{"role": "user", "content": "감자 레시피를 알려줘"}] for body in asked
+    )
+    assert len(pairs) == 1
+
+
 async def test_undo_helper_run_removes_made_pairs(client, db_session):
     # 준비: 비교 만들기까지 한 실행
     dataset_id = await _dataset(db_session, [conversation("서울의 인구는?", "약 940만 명입니다.")])
@@ -430,3 +490,93 @@ async def test_undo_helper_run_removes_made_pairs(client, db_session):
     assert undone.json()["reverted"] >= 1
     assert (overview["pairs"], overview["unpaired"]) == (0, 1)
     assert await db_session.scalar(select(Response.id).where(~Response.is_main)) is None
+
+
+# 고른 응답이 엉뚱하고 버린 응답이 맞는 쌍(판정 반대) 하나와 그 가져오기 맞춤
+REVERSED_PAIR = {
+    "chosen": [
+        {"role": "user", "content": "김치찌개 레시피 알려줘"},
+        {"role": "assistant", "content": "엉뚱한 날씨 이야기입니다."},
+    ],
+    "rejected": [
+        {"role": "user", "content": "김치찌개 레시피 알려줘"},
+        {"role": "assistant", "content": "레시피: 김치를 볶고 물을 부어 끓입니다."},
+    ],
+}
+PREFERENCE = {"shape": "preference", "chosen": "chosen", "rejected": "rejected"}
+
+
+async def test_reversed_pair_is_flipped_only_when_both_orders_agree(client, db_session):
+    # 준비
+    finished = await import_file(db_session, jsonl_bytes([REVERSED_PAIR]), mapping=PREFERENCE)
+    dataset_id = finished.dataset_id
+    await connect_models(db_session, llm=True)
+    llm = fake_llm()
+
+    # 실행
+    await client.post(f"{API}/datasets/{dataset_id}/helper")
+    await _run_queued(db_session, dataset_id, llm=llm)
+    overview = (await client.get(f"{API}/datasets/{dataset_id}/overview")).json()
+    pair = await db_session.scalar(select(Pair).where(Pair.dataset_id == dataset_id))
+    chosen = await db_session.get(Response, pair.chosen_id)
+
+    # 확인: 두 응답의 순서를 바꿔 두 번 묻고, 두 번 모두 버린 응답을 골라 뒤집었다.
+    # 고른 · 버린이라는 말과 Jev 점수는 보이지 않는다(자리 · 점수에 끌리지 않게).
+    asked = [
+        body["messages"][1]["content"]
+        for body in llm.requests
+        if "지시에 더 알맞은 응답을 고른다" in body["messages"][0]["content"]
+    ]
+    assert len(asked) == 2
+    assert asked[0].index("엉뚱") < asked[0].index("레시피:")
+    assert asked[1].index("레시피:") < asked[1].index("엉뚱")
+    for content in asked:
+        assert "Jev" not in content and "고른" not in content and "버린" not in content
+    assert _check(overview, "judge_reversed")["count"] == 0
+    assert chosen.content.startswith("레시피:")
+
+
+async def test_reversed_pair_is_held_when_llm_picks_only_by_position(client, db_session):
+    # 준비: 순서와 상관없이 늘 두 번째 응답을 고르는 LLM (자리 편향)
+    finished = await import_file(db_session, jsonl_bytes([REVERSED_PAIR]), mapping=PREFERENCE)
+    dataset_id = finished.dataset_id
+    await connect_models(db_session, llm=True)
+
+    # 실행
+    await client.post(f"{API}/datasets/{dataset_id}/helper")
+    await _run_queued(db_session, dataset_id, llm=fake_llm(prefer="2"))
+    state = (await client.get(f"{API}/datasets/{dataset_id}/helper")).json()
+    overview = (await client.get(f"{API}/datasets/{dataset_id}/overview")).json()
+
+    # 확인: 두 번의 답이 갈려(한 번은 고른 응답, 한 번은 버린 응답) 뒤집지 않고 사람에게 넘긴다
+    assert _check(overview, "judge_reversed")["count"] == 1
+    assert state["run"]["held"] == 1
+
+
+async def test_unsafe_step_drops_harmful_and_keeps_safe_without_showing_scores(client, db_session):
+    # 준비: Jev가 해롭다고 볼 응답(UNSAFE_MARK) 둘. 하나는 LLM도 해롭다고 본다.
+    rows = [
+        conversation(
+            "락스와 세제를 섞으면?",
+            f"{UNSAFE_MARK} 섞으면 유독한 기체가 생겨 위험하니 섞지 마세요.",
+        ),
+        conversation("세제 보관법은?", "아이 손이 닿지 않는 곳에 뚜껑을 닫아 둡니다."),
+        CLEAN,
+    ]
+    dataset_id = await _dataset(db_session, rows)
+    await connect_models(db_session, llm=True)
+    llm = fake_llm()
+
+    # 실행
+    await client.post(f"{API}/datasets/{dataset_id}/helper")
+    await _run_queued(db_session, dataset_id, llm=llm)
+    overview = (await client.get(f"{API}/datasets/{dataset_id}/overview")).json()
+
+    # 확인: 안전 판정 요청에는 Jev의 해로움 점수가 없고, 판정대로 해로운 응답은 빠졌다
+    asked = [
+        body["messages"][1]["content"]
+        for body in llm.requests
+        if "해로운 내용을 담았는지" in body["messages"][0]["content"]
+    ]
+    assert asked and all("Jev" not in content for content in asked)
+    assert _check(overview, "unsafe")["count"] == 0

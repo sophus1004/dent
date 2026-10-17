@@ -1,4 +1,6 @@
 """응답 만들기: 응답이 없는 지시(지시만 데이터)에 LLM이 응답을 쓴다. 비교 만들기의 견줄 응답도 여기서 쓴다.
+학습할 모델이 연결돼 있으면 비교 만들기의 견줄 응답은 학습할 모델이 대화에 그대로 답한 것이다(policy_messages:
+지침을 붙이지 않아야 그 모델이 평소에 내는 응답이 된다, on-policy).
 
 만든 응답은 출처가 synthetic이다(내보내는 파일의 출처 칸으로 가를 수 있게). 학습에 바로 쓸 수 없는 모양
 (빈 · 잘린 응답 · 루프 · 언어 섞임 · 번역된 코드)이면 한 번 더 쓰게 하고, 그래도 걸리면 넣지 않는다(모자람으로 센다).
@@ -46,6 +48,9 @@ OTHER_TASK = (
 
 EMPTY_REPLY_MESSAGE = "LLM이 빈 글을 돌려주었습니다. 다시 해 주세요."
 
+# 학습할 모델에 맥락 그대로 보내는 말의 역할 (도구 대화는 비교 만들기에서 빠진다)
+POLICY_ROLES = ("system", "user", "assistant")
+
 
 def answer_messages(
     messages: list[dict[str, Any]], *, other: str | None = None
@@ -59,6 +64,15 @@ def answer_messages(
     return [
         ChatMessage(role="system", content=SYSTEM_PROMPT),
         ChatMessage(role="user", content=prompt),
+    ]
+
+
+def policy_messages(messages: list[dict[str, Any]]) -> list[ChatMessage]:
+    """학습할 모델에 보내는 말들: 대화의 맥락 그대로(system · user · assistant). 지침을 더하지 않는다."""
+    return [
+        ChatMessage(role=message["role"], content=message["content"])
+        for message in messages
+        if message["role"] in POLICY_ROLES
     ]
 
 

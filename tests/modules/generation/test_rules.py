@@ -131,3 +131,10 @@ def test_grade_of_follows_kind_and_rate_limits():
     assert rules.grade_of(CheckKey.CODE_TRANSLATED, count=5, total=1000) == "good"
     assert rules.grade_of(CheckKey.CODE_TRANSLATED, count=30, total=1000) == "warn"
     assert rules.grade_of(CheckKey.CODE_TRANSLATED, count=60, total=1000) == "bad"
+
+
+def test_safety_examples_warn_only_when_none_in_a_large_enough_sample():
+    # 확인: 안전 예시가 없으면 주의지만, 판정한 대화가 적으면(우연일 수 있어) 보지 않는다
+    assert rules.grade_of(CheckKey.SAFETY_EXAMPLES, count=0, total=200) == "warn"
+    assert rules.grade_of(CheckKey.SAFETY_EXAMPLES, count=0, total=50) == "good"
+    assert rules.grade_of(CheckKey.SAFETY_EXAMPLES, count=3, total=200) == "good"

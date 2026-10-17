@@ -175,7 +175,14 @@ def _revert_row(
     elif field == HelperField.TEXT:
         if row.text != change.after:
             return False
-        row.text = str(change.before)
+        before = change.before
+        if isinstance(before, dict):
+            # 질의 고쳐 쓰기는 글과 출처를 함께 적었다(예전 기록은 글만).
+            row.text = str(before["text"])
+            if isinstance(row, Query) and before.get("source"):
+                row.source = str(before["source"])
+        else:
+            row.text = str(before)
         row.text_hash = make_text_hash(row.text)
     elif field == HelperField.SKIP_GENERATION and isinstance(row, Document):
         if row.skip_generation != change.after:

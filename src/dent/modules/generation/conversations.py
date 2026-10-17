@@ -34,6 +34,7 @@ from dent.modules.generation.models import (
     Action,
     Change,
     Contamination,
+    ContaminationMethod,
     Judgment,
     Pair,
     Prompt,
@@ -74,6 +75,15 @@ CHANGE_PAGE_SIZE = 30
 
 # 문제 조각의 최대 글자 수
 SNIPPET_LENGTH = 80
+
+# 오염 줄에 붙이는 평가 문항 앞부분의 글자 수 (어느 문항과 겹쳤는지 사람이 견줘 보게)
+EVAL_QUOTE_LENGTH = 60
+
+# 오염을 뜻으로 찾은 방법의 낱말
+CONTAMINATION_METHOD_WORDS = {
+    ContaminationMethod.PARAPHRASE: "바꿔 쓰거나 옮김",
+    ContaminationMethod.SIMILAR: "거의 같음",
+}
 
 # 자리가 없는 문제의 조각 글
 SNIPPET_WITHOUT_SPAN = {
@@ -142,8 +152,9 @@ class ConversationItem:
     is_mismatch: bool = False
     is_unsafe: bool = False
 
-    # 평가셋과 겹친 대조 결과 (그대로 두기로 둔 것도 싣는다). 겹치지 않았으면 None
+    # 평가셋과 겹친 대조 결과 (그대로 두기로 둔 것도 싣는다)와 겹친 평가 문항의 지시 글. 겹치지 않았으면 None
     contamination: Contamination | None = None
+    contamination_eval: str | None = None
 
     # 뜻 분석의 Jev 판정. 묻지 않았으면 None
     judgment: Judgment | None = None
@@ -284,7 +295,10 @@ def conversation_read(item: ConversationItem) -> ConversationRead:
         found.append(_problem_read(CheckKey.NEAR_DUPLICATE, {}, messages))
     if item.contamination is not None and CheckKey.CONTAMINATION.value not in kept:
         found.append(
-            _whole(CheckKey.CONTAMINATION, f"평가셋과 겹침 {item.contamination.coverage:.0%}")
+            _whole(
+                CheckKey.CONTAMINATION,
+                _contamination_text(item.contamination, item.contamination_eval),
+            )
         )
     judgment = item.judgment
     if item.is_mismatch and judgment is not None:
@@ -1103,6 +1117,16 @@ async def _items(db: AsyncSession, *, dataset_id: int, ids: list[int]) -> list[C
             await db.scalars(select(Contamination).where(Contamination.prompt_id.in_(ids)))
         ).all()
     }
+    eval_texts = {
+        prompt_id: semantic.instruction_text(messages)
+        for prompt_id, messages in (
+            await db.execute(
+                select(Prompt.id, Prompt.messages).where(
+                    Prompt.id.in_({row.eval_prompt_id for row in contaminations.values()})
+                )
+            )
+        ).all()
+    }
     duplicate_ids = await _among(db, problems.duplicate_extras(dataset_id), ids)
     near_ids: set[int] = set()
     mismatch: set[int] = set()
@@ -1131,6 +1155,11 @@ async def _items(db: AsyncSession, *, dataset_id: int, ids: list[int]) -> list[C
                 is_mismatch=i in mismatch,
                 is_unsafe=i in unsafe,
                 contamination=contaminations.get(i),
+                contamination_eval=(
+                    eval_texts.get(contaminations[i].eval_prompt_id)
+                    if i in contaminations
+                    else None
+                ),
                 judgment=judgments.get(i),
             )
         )
@@ -1188,6 +1217,21 @@ def _jev_read(judgment: Judgment | None) -> JevRead | None:
         unsafe=judgment.unsafe,
         looks_fine=judging.looks_fine(judgment.follows),
     )
+
+
+def _contamination_text(row: Contamination, eval_text: str | None) -> str:
+    """오염 줄의 조각: 찾은 방법과 값, 겹친 평가 문항의 앞부분."""
+    if row.method == ContaminationMethod.NGRAM or row.similarity is None:
+        found = f"평가셋과 겹침 {row.coverage or 0:.0%}"
+    else:
+        words = CONTAMINATION_METHOD_WORDS[ContaminationMethod(row.method)]
+        found = f"{words} · 코사인 {row.similarity:.2f}"
+    if not eval_text:
+        return found
+    quote = " ".join(eval_text.split())
+    if len(quote) > EVAL_QUOTE_LENGTH:
+        quote = quote[:EVAL_QUOTE_LENGTH] + "…"
+    return f"{found} · 평가 문항: {quote}"
 
 
 def _whole(key: CheckKey, snippet: str) -> ProblemRead:

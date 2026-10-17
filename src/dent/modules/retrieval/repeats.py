@@ -18,10 +18,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dent.modules.retrieval import lengths
 from dent.modules.retrieval import service as retrieval_service
 from dent.modules.retrieval.models import (
     DatasetSettings,
@@ -40,7 +42,6 @@ from dent.modules.retrieval.text_rules import (
     covered_chars,
     cut_spans,
     document_input,
-    estimate_tokens,
     has_broken_text,
     is_edge,
     meta_hits,
@@ -48,8 +49,9 @@ from dent.modules.retrieval.text_rules import (
     skip_generation_reason,
 )
 from dent.system import datasets as datasets_service
-from dent.system import jobs
-from dent.system.exceptions import NotFoundError
+from dent.system import jobs, tokenizers
+from dent.system.config import get_settings
+from dent.system.exceptions import ExternalServiceError, InvalidInputError, NotFoundError
 from dent.system.text import make_text_hash
 
 # 살피기 작업의 종류와 단계 이름 (화면 index.ts의 jobKinds.scan.phases와 같다)
@@ -99,6 +101,9 @@ class Rules:
 
     # 떼기로 고른 열쇠들
     removed: frozenset[str] = frozenset()
+
+    # 학습 글의 토큰을 세는 기준 (학습할 모델의 토크나이저, 없으면 글자 수 어림)
+    counting: lengths.Counting = lengths.ESTIMATE
 
 
 @dataclass(frozen=True)
@@ -178,6 +183,7 @@ async def load_rules(db: AsyncSession, *, dataset_id: int) -> Rules:
         sentence_ids=sentence_ids,
         meta_ids=meta_ids,
         removed=frozenset(removed),
+        counting=await lengths.counting(db, dataset_id=dataset_id),
     )
 
 
@@ -205,7 +211,7 @@ def refresh_values(*, title: str, header: str, section: str, text: str, rules: R
         text_hash=make_text_hash(text),
         input_text=None if training == text else training,
         input_hash=make_text_hash(training),
-        token_count=estimate_tokens(training),
+        token_count=rules.counting.count(training),
         marks=marks,
         repeat_ids=frozenset(repeat_id for repeat_id in ids if repeat_id is not None),
     )
@@ -252,6 +258,93 @@ async def refresh_documents(
     if links:
         await db.execute(insert(DocumentRepeat).on_conflict_do_nothing(), links)
     return changed
+
+
+# ---------- 토큰 다시 세기 ----------
+
+
+@dataclass(frozen=True)
+class Recounted:
+    """토큰을 다시 센 결과."""
+
+    # 센 기준 (토크나이저의 모델 이름, 글자 수 어림이면 None)
+    model: str | None
+
+    # 다시 잰 문서 수 · 그 가운데 최대 길이를 넘는 문서 수
+    documents: int
+    long_documents: int
+
+
+async def recount_dataset(
+    db: AsyncSession,
+    *,
+    dataset_id: int,
+    job_id: int | None,
+    download: bool,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> Recounted:
+    """모든 문서의 학습 글 · 토큰 수를 지금 기준으로 다시 잰다. 커밋한다.
+
+    download면 학습할 모델의 토크나이저가 이 PC에 없을 때 받아 본다(사람이 학습할 모델을 바꿨을 때).
+    받지 못하면(허깅페이스에 없는 이름 등) 글자 수 어림으로 잰다. 없는 데이터셋이면 NotFoundError.
+    """
+    settings = await retrieval_service.get_settings(db, dataset_id=dataset_id)
+    target = settings.target_model
+    is_downloadable = bool(target) and tokenizers.MODEL_NAME.match(target or "") is not None
+    if download and is_downloadable and lengths.local_tokenizer(target) is None:
+        try:
+            await tokenizers.ensure_tokenizer(get_settings(), target or "", transport=transport)
+        except (NotFoundError, ExternalServiceError, InvalidInputError):
+            # 학습할 모델 이름이 임베딩 서버의 별칭일 수 있다. 그때는 어림으로 잰다.
+            pass
+    rules = await load_rules(db, dataset_id=dataset_id)
+    ids = list(
+        await db.scalars(
+            select(Document.id)
+            .where(Document.dataset_id == dataset_id, DOCUMENT_ACTIVE)
+            .order_by(Document.id)
+        )
+    )
+    await _phase(db, job_id=job_id, phase=PHASE_REFRESH, total=len(ids))
+    done = 0
+    changed = 0
+    for chunk in itertools.batched(ids, SCAN_BATCH):
+        documents = list(
+            await db.scalars(select(Document).where(Document.id.in_(chunk)).order_by(Document.id))
+        )
+        changed += await refresh_documents(
+            db, dataset_id=dataset_id, documents=documents, rules=rules
+        )
+        done += len(chunk)
+        await _progress(db, job_id=job_id, done=done, total=len(ids))
+    settings.measured_model = rules.counting.model
+    if changed:
+        await datasets_service.touch_dataset(db, dataset_id=dataset_id)
+    long_documents = await db.scalar(
+        select(func.count())
+        .select_from(Document)
+        .where(
+            Document.dataset_id == dataset_id,
+            DOCUMENT_ACTIVE,
+            Document.token_count > settings.doc_max_tokens,
+        )
+    )
+    await db.commit()
+    return Recounted(
+        model=rules.counting.model, documents=len(ids), long_documents=int(long_documents or 0)
+    )
+
+
+async def sync_lengths(db: AsyncSession, *, dataset_id: int) -> bool:
+    """토큰을 센 기준이 지금 기준과 다르면(토크나이저가 생기거나 바뀜) 받지 않고 다시 잰다. 다시 쟀는지."""
+    settings = await retrieval_service.find_settings(db, dataset_id=dataset_id)
+    if settings is None:
+        return False
+    now = await lengths.counting(db, dataset_id=dataset_id)
+    if now.model == settings.measured_model:
+        return False
+    await recount_dataset(db, dataset_id=dataset_id, job_id=None, download=False)
+    return True
 
 
 # ---------- 살피기 ----------
@@ -339,6 +432,7 @@ async def scan_dataset(db: AsyncSession, *, dataset_id: int, job_id: int | None)
         done += len(chunk)
         await _progress(db, job_id=job_id, done=done, total=total)
     settings.scanned_at = datetime.now(UTC)
+    settings.measured_model = rules.counting.model
     if changed:
         # 학습 글이 바뀌었으면 뜻 분석 · 오답이 그 사이 바뀐 것으로 보이게 한다.
         await datasets_service.touch_dataset(db, dataset_id=dataset_id)

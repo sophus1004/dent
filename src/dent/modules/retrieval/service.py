@@ -27,12 +27,16 @@ from dent.modules.retrieval.models import (
 from dent.modules.retrieval.schemas import ImportCreate, SettingsUpdate
 from dent.system import datasets as datasets_service
 from dent.system import imports as imports_service
-from dent.system import sources
+from dent.system import jobs, sources
 from dent.system.exceptions import ConflictError, InvalidInputError, NotFoundError
+from dent.system.groups import Groups
 from dent.system.models import IMPORTING_STATUSES, Dataset, Import
 
 # 이 모듈의 이름. 데이터셋 목록의 module, 작업 대기열의 module, API 주소, 테이블 앞머리가 모두 이 이름이다.
 MODULE_NAME = "retrieval"
+
+# 문서 · 청크의 토큰을 학습할 모델의 토크나이저로 다시 재는 작업 종류 (lengths · repeats)
+LENGTH_JOB_KIND = "length"
 
 DATASET_ANALYZING_MESSAGE = (
     "뜻 분석을 만드는 중인 데이터셋은 지울 수 없습니다. 뜻 분석을 멈춘 뒤 지우세요."
@@ -188,7 +192,17 @@ async def update_settings(
     # (건드리면 뜻 분석이 '분석 이후 변경'이 되어 도우미가 시작할 때 분석을 다시 만든다).
     is_run_setting_only = set(fields) <= RUN_SETTING_FIELDS
     if "target_model" in fields:
-        settings.target_model = fields.pop("target_model") or None
+        target = fields.pop("target_model") or None
+        if target != settings.target_model:
+            # 학습할 모델이 바뀌면 그 토크나이저로 문서 · 청크의 토큰을 다시 잰다(없으면 받는다).
+            await jobs.enqueue_job(
+                db,
+                module=MODULE_NAME,
+                kind=LENGTH_JOB_KIND,
+                params={"dataset_id": dataset_id},
+                dataset_id=dataset_id,
+            )
+        settings.target_model = target
     for name, value in fields.items():
         if value is not None:
             setattr(settings, name, value)
@@ -328,29 +342,14 @@ async def duplicate_groups(db: AsyncSession, *, dataset_id: int) -> dict[int, in
     본문이 같거나(해시) 가장 최근 뜻 분석의 근접 중복 쌍이면 한 묶음이다(이어진 쌍도 한 묶음).
     묶음은 서로 오답이 되지 않고, 정답 목록(BEIR qrels) · 질의 만들기(대표 하나)의 단위가 된다.
     """
-    parent: dict[int, int] = {}
-
-    def find(item: int) -> int:
-        while parent[item] != item:
-            parent[item] = parent[parent[item]]
-            item = parent[item]
-        return item
-
-    def union(left: int, right: int) -> None:
-        root_left, root_right = find(left), find(right)
-        if root_left != root_right:
-            parent[max(root_left, root_right)] = min(root_left, root_right)
-
+    grouped = Groups[int]()
     first_by_hash: dict[str, int] = {}
     for document_id, text_hash in await db.execute(
         select(Document.id, Document.text_hash)
         .where(Document.dataset_id == dataset_id, DOCUMENT_ACTIVE)
         .order_by(Document.id)
     ):
-        parent[document_id] = document_id
-        first = first_by_hash.setdefault(text_hash, document_id)
-        if first != document_id:
-            union(first, document_id)
+        grouped.union(first_by_hash.setdefault(text_hash, document_id), document_id)
     analysis = await latest_done_analysis(db, dataset_id=dataset_id)
     if analysis is not None:
         for item_a, item_b in await db.execute(
@@ -359,9 +358,9 @@ async def duplicate_groups(db: AsyncSession, *, dataset_id: int) -> dict[int, in
                 NearDuplicate.kind == ItemKind.DOCUMENT.value,
             )
         ):
-            if item_a in parent and item_b in parent:
-                union(item_a, item_b)
-    return {document_id: find(document_id) for document_id in parent}
+            if item_a in grouped and item_b in grouped:
+                grouped.union(item_a, item_b)
+    return grouped.representatives()
 
 
 async def latest_done_analysis(db: AsyncSession, *, dataset_id: int) -> Analysis | None:

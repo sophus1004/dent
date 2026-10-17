@@ -688,11 +688,14 @@ class KpiRead(BaseModel):
 
     recall_at_10: float
     mrr_at_10: float
+    # 판정 등급을 이득으로 본 nDCG@10. 이 값을 재기 전에 만든 분석이면 null
+    ndcg_at_10: float | None
     # 잰 질의 수
     evaluated: int
-    # 첫 뜻 분석의 값 (정제 전)
+    # 첫 뜻 분석의 값 (정제 전). 첫 분석이 nDCG를 재기 전이었으면 baseline_ndcg_at_10은 null
     baseline_recall_at_10: float | None
     baseline_mrr_at_10: float | None
+    baseline_ndcg_at_10: float | None
 
 
 class BinRead(BaseModel):
@@ -911,8 +914,11 @@ class ExportCreate(BaseModel):
     )
     negatives: int = Field(default=7, ge=NEGATIVES_RANGE[0], le=NEGATIVES_RANGE[1])
     teacher_scores: bool = True
-    # 학습 표에 출처 칸(source: original · synthetic · human)을 넣을지. jsonl · BEIR에는 늘 넣는다.
+    # 학습 표에 출처 · 묶음 칸(source: original · synthetic · human, group)을 넣을지. jsonl · BEIR에는 늘 넣는다.
     source_column: bool = True
+    # 평가 BEIR의 정답에 정답 문서의 중복 묶음(같은 본문 · 근접 중복)도 넣을지. 끄면 판정한 문서만 정답이다
+    # (다른 평가와 견주려고 원래 정답만 둘 때).
+    qrels_groups: bool = True
 
 
 class ExportFileRead(BaseModel):

@@ -28,8 +28,6 @@ from dent.modules.retrieval import service as retrieval_service
 from dent.modules.retrieval.models import (
     POSITIVE_MIN_GRADE,
     Document,
-    HelperField,
-    HelperTarget,
     Judgment,
     Query,
     Ranking,
@@ -49,7 +47,6 @@ from dent.system import helper as helper_service
 from dent.system.agent import LEFT_AI, LEFT_BLOCKED, LEFT_DIRECT, Agent, LeftItem
 from dent.system.exceptions import ExternalServiceError
 from dent.system.models import Connection, ConnectionRole, HelperEventKind
-from dent.system.text import make_text_hash
 
 # 검사 하나를 고칠 때 보는 최대 수 (비용 어림도 이 수로 끊는다)
 FIX_MAX_ITEMS = 300
@@ -72,10 +69,15 @@ NO = "no"
 UNSURE = "unsure"
 ANSWER_WORDS = {YES: "예", NO: "아니오", UNSURE: "모름"}
 
+# 판정 지시. 이유(why)를 먼저 쓰게 한다: 답을 먼저 쓰면 이유에서 틀렸다고 쓰고도 답은 yes로 남기곤 했다.
+# 이름이 비슷한 다른 대상을 짚는다: 예시에서 '왕산악이 만든 현악기'에 가야금 문서, '가장 넓은 민물 호수'에 카스피해 문서를
+# 정답으로 보곤 했다.
 JUDGE_PROMPT = (
-    "너는 검색 학습 데이터의 판정자다. 항목마다 문서가 질의의 답을 담았는지 본다. "
-    "분명히 담았으면 yes, 분명히 아니면 no, 문서만으로 가를 수 없으면 unsure. "
-    '답은 JSON 하나만: {"items": [{"id": 번호, "answer": "yes" | "no" | "unsure"}]}'
+    "너는 검색 학습 데이터의 판정자다. 항목마다 문서가 질의가 묻는 바로 그 대상 · 사실을 답으로 담았는지 본다. "
+    "이름이 비슷한 다른 대상이거나, 주제만 같고 묻는 사실이 없으면 no. 분명히 담았으면 yes, "
+    "문서만으로 가를 수 없으면 unsure. "
+    '답은 JSON 하나만: {"items": [{"id": 번호, "why": "한 줄", "answer": "yes" | "no" | "unsure"}]} '
+    "(why를 먼저 쓰고 그에 맞게 answer를 고른다)"
 )
 REWRITE_PROMPT = (
     "너는 검색 질의를 고쳐 쓴다. 질의가 ‘이 글’ · ‘그는’처럼 문맥에 기대면, 문서의 고유 이름을 넣어 "
@@ -569,26 +571,21 @@ async def _suggestions(
 async def _fix_suggestions(
     fixing: Fixing, kind: SuggestionKind, *, action: str, accept_on: str
 ) -> dict[str, Any]:
-    """제안: Jev가 확인한 것은 받고, 나머지는 LLM이 본다. accept_on이면 받고, 아니면 유지(다시 묻지 않음)."""
+    """제안: LLM이 모두 본다(Jev가 확인한 것도). LLM이 accept_on이고 Jev가 반대로 확신하지 않으면 받고, 아니면
+    유지(다시 묻지 않음). 정답을 바꾸는 판단을 Jev 하나로 하지 않는다(Jev는 이름이 비슷한 함정 문서에도 '예'를 줬다)."""
     analysis_id = await _analysis_id(fixing)
     if analysis_id is None:
         return {}
     log = edits.ChangeLog()
-    await edits.accept_suggestions(
-        fixing.db,
-        dataset_id=fixing.dataset_id,
-        analysis_id=analysis_id,
-        kind=kind,
-        confirmed_only=True,
-        log=log,
-    )
+    opposite = YES if accept_on == NO else NO
     rows = await _suggestions(fixing, analysis_id, kind)
     answers = await fixing.judge(
         [(suggestion.id, query, document) for suggestion, query, document in rows]
     )
     now = datetime.now(UTC)
     for suggestion, _query, _document in rows:
-        if answers.get(suggestion.id) == accept_on:
+        is_agreed = answers.get(suggestion.id) == accept_on
+        if is_agreed and jev_answer(suggestion.jev_probability) != opposite:
             if kind == SuggestionKind.SUSPECT_POSITIVE:
                 judgment = await fixing.db.get(
                     Judgment, (suggestion.query_id, suggestion.document_id)
@@ -661,16 +658,7 @@ async def fix_context(fixing: Fixing) -> dict[str, Any]:
             if not text or text == query.text:
                 failed.append(query.id)
                 continue
-            log.add(
-                target=HelperTarget.QUERY,
-                field_name=HelperField.TEXT,
-                query_id=query.id,
-                before=query.text,
-                after=text,
-            )
-            query.text = text
-            query.text_hash = make_text_hash(text)
-            query.row_version += 1
+            edits.rewrite_query(query, text, log=log)
             rewritten.append(text)
     changed = await fixing.record(log, action="질의 고치기", tool="LLM", samples=rewritten)
     if failed:

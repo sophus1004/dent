@@ -7,6 +7,7 @@ import {
   Cpu,
   Database,
   Gavel,
+  GraduationCap,
   HardDrive,
   Layers,
   Waypoints,
@@ -67,6 +68,7 @@ const MODEL_ROLES: Record<ModelInfoRead['role'], { icon: LucideIcon; name: strin
   embedding: { icon: Waypoints, name: '임베딩' },
   jev: { icon: Gavel, name: 'Jev' },
   llm: { icon: Bot, name: 'LLM' },
+  target: { icon: GraduationCap, name: '학습할 모델' },
 }
 
 // 1GB (내려받기 진행을 GB로 보인다)
