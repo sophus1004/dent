@@ -5,10 +5,12 @@ import json
 import re
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
+from dent.modules.generation import contamination
 from dent.modules.generation.jobs import run_contamination_job
-from dent.system.models import Job
+from dent.system.models import Job, JobStatus
 from tests.modules.generation.helpers import (
     connect_models,
     conversation,
@@ -188,3 +190,61 @@ async def test_without_embedding_only_ngram_is_used(client, db_session):
     # 확인: 바꿔 쓴 문항은 못 찾고, 진단이 8-gram만 했다고 보인다
     assert set(checked["found"]) == {COPY}
     assert checked["overview"]["contamination"]["by"] == "ngram"
+
+
+async def _eval_and_train(client, db_session) -> int:
+    """평가셋과 학습 데이터셋을 넣고, 넣으며 생긴 대조 작업은 지운다. 학습 데이터셋 번호."""
+    train = await import_file(
+        db_session, jsonl_bytes(messages_rows([conversation(COPY, "답입니다.")])), name="학습"
+    )
+    evaluation = await import_file(
+        db_session,
+        jsonl_bytes(messages_rows([conversation(EVAL_ITEM, "모범 답안입니다.")])),
+        name="평가",
+    )
+    await client.patch(f"{API}/datasets/{evaluation.dataset_id}/settings", json={"is_eval": True})
+    for job in await db_session.scalars(select(Job).where(Job.kind == "contamination")):
+        await db_session.delete(job)
+    await db_session.commit()
+    return train.dataset_id
+
+
+async def test_queue_check_keeps_one_waiting_check_per_dataset(client, db_session):
+    # 준비
+    dataset_id = await _eval_and_train(client, db_session)
+
+    # 실행: 평가셋 가져오기 둘이 함께 끝나 같은 데이터셋의 대조를 두 번 넣는다
+    first = await contamination.queue_check(db_session, dataset_id=dataset_id)
+    second = await contamination.queue_check(db_session, dataset_id=dataset_id)
+    await db_session.commit()
+
+    # 확인
+    assert first is not None and second is not None and first.id == second.id
+    count = await db_session.scalar(
+        select(func.count()).select_from(Job).where(Job.kind == "contamination")
+    )
+    assert count == 1
+
+
+async def test_run_check_queues_again_when_eval_items_vanish_while_checking(
+    client, db_session, monkeypatch
+):
+    # 준비: 대조하는 동안 평가 문항이 지워져 겹친 줄을 적지 못한다
+    dataset_id = await _eval_and_train(client, db_session)
+
+    async def vanished(*_args: object, **_kwargs: object) -> dict:
+        raise IntegrityError("INSERT generation_contaminations", None, Exception("fk"))
+
+    monkeypatch.setattr(contamination, "_run_check", vanished)
+
+    # 실행
+    result = await contamination.run_check(db_session, dataset_id=dataset_id, job_id=0)
+
+    # 확인: 실패시키지 않고 대조를 다시 넣는다
+    assert result == {"restarted": True}
+    queued = (
+        await db_session.scalars(
+            select(Job).where(Job.kind == "contamination", Job.status == JobStatus.QUEUED)
+        )
+    ).all()
+    assert [job.dataset_id for job in queued] == [dataset_id]

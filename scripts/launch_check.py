@@ -106,6 +106,12 @@ def _check(settings: Settings, *, model: bool) -> bool:
         print("준비되지 않았습니다")
         return False
     print("준비됨 · 작업 실행기:", body["info"]["worker"]["detail"])
+    pool = _get_json(f"http://{LOOPBACK_HOST}:{PORT}/api/v1/workers")
+    running = [slot["slot"] for slot in (pool or {}).get("slots", []) if slot["state"] == "running"]
+    print("작업 실행기 번호:", running, "/ 정한 수", (pool or {}).get("count"))
+    if not pool or running != list(range(1, int(pool["count"]) + 1)):
+        print("작업 실행기가 정한 수만큼 뜨지 않았습니다")
+        return False
     print(
         "모델 줄:", [(item["role"], item["state"], item.get("device")) for item in body["models"]]
     )

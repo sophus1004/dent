@@ -1,6 +1,6 @@
 <!--
   시스템 줄 목록: 아이콘 · 이름 · 상태 낱말 · (태그) 값 (+ 끝에 등급 아이콘). 홈의 시스템 칸과 상태 화면이 같이 쓴다.
-  태그는 내장 DB의 '내장'이다.
+  태그는 내장 DB의 '내장'이다. 줄에 버튼이 있으면(작업 실행기 [설정]) 끝에 작은 버튼을 둔다.
   showDetail이면 준비 조건이 안 된 줄 아래에 서버가 준 원래 설명을 작은 글자로 보인다(상태 화면).
 -->
 <script setup lang="ts">
@@ -8,6 +8,7 @@ import { CircleCheck, OctagonAlert } from '@lucide/vue'
 
 import SourceTag from '@/system/pages/SourceTag.vue'
 import type { SystemRow, SystemTone } from '@/system/status'
+import { Button } from '@/system/ui/button'
 
 defineProps<{
   rows: SystemRow[]
@@ -39,6 +40,17 @@ const WORD_CLASS: Record<SystemTone, string> = {
           <SourceTag v-if="row.tag" :label="row.tag" embedded />
           <span class="truncate" :title="row.value || undefined">{{ row.value }}</span>
         </dd>
+        <Button
+          v-if="row.action"
+          type="button"
+          variant="quiet"
+          size="xs"
+          class="shrink-0"
+          :data-action="`${row.key}-settings`"
+          @click="row.action.run"
+        >
+          {{ row.action.label }}
+        </Button>
         <CircleCheck v-if="row.tone === 'good'" class="size-4 shrink-0 text-success" />
         <OctagonAlert v-else-if="row.tone === 'bad'" class="size-4 shrink-0 text-danger" />
       </div>

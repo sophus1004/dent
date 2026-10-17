@@ -3,7 +3,9 @@
 import pytest
 
 from dent.system import datasets as datasets_service
+from dent.system import jobs
 from dent.system.exceptions import ConflictError, NotFoundError
+from dent.system.models import JobStatus
 from dent.system.schemas import DatasetUpdate
 
 
@@ -110,3 +112,31 @@ async def test_touch_dataset_moves_dataset_to_top_of_list(db_session):
     # 확인
     listed = await datasets_service.list_datasets(db_session, module="classification")
     assert [dataset.id for dataset in listed] == [first.id, second.id]
+
+
+async def test_delete_dataset_cancels_waiting_jobs_and_asks_running_job_to_stop(db_session):
+    # 준비: 도는 작업 하나와 그 뒤에 기다리는 작업 하나
+    dataset = await datasets_service.create_dataset(
+        db_session, module="classification", name="뉴스"
+    )
+    for kind in ("map", "export"):
+        await jobs.enqueue_job(
+            db_session, module="classification", kind=kind, params={}, dataset_id=dataset.id
+        )
+    await db_session.commit()
+    running = await jobs.claim_next_job(db_session, worker=1)
+    assert running is not None
+    page = await jobs.list_jobs(db_session)
+    waiting = next(job for job in page.items if job.kind == "export")
+
+    # 실행
+    await datasets_service.delete_dataset(
+        db_session, dataset_id=dataset.id, module="classification"
+    )
+    await db_session.commit()
+
+    # 확인
+    await db_session.refresh(running)
+    await db_session.refresh(waiting)
+    assert waiting.status == JobStatus.CANCELED
+    assert running.status == JobStatus.RUNNING and running.cancel_requested

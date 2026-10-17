@@ -4,7 +4,9 @@
 torch 없이 돈다: 모델을 불러오는 함수(loader)와 장치 확인을 가짜로 넘긴다(장치 확인 자체는 torch가 있을 때만 잰다).
 """
 
+import asyncio
 import hashlib
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -357,3 +359,48 @@ def test_batches_keep_sentence_count_and_token_budget():
 
     # 확인: 16개 상한, 긴 문장은 (길이 × 수) 상한으로 따로
     assert [len(batch) for batch in batches] == [16, 4, 1, 1]
+
+
+def test_backlog_pushes_back_when_too_many_wait_or_wait_is_long():
+    # 준비
+    backlog = model_server.Backlog()
+
+    # 실행 · 확인: 몇 개 기다리는 동안은 받는다
+    backlog.pending = 3
+    assert backlog.retry_after() is None
+
+    # 늘 오래 걸리면 기다리는 수가 적어도 되민다(Retry-After는 어림한 기다림)
+    for _ in range(20):
+        backlog.measured(8.0)
+    assert backlog.retry_after() == 24
+
+    # 기다리는 수가 상한이면 되민다
+    backlog.encode_s = 0.01
+    backlog.pending = model_server.MAX_PENDING_REQUESTS
+    assert backlog.retry_after() == model_server.MIN_RETRY_AFTER_S
+
+
+async def test_embedding_app_pushes_back_with_retry_after_when_backlog_is_full(monkeypatch):
+    # 준비: 한 번에 하나만 받게 하고, 계산은 풀어 줄 때까지 붙잡는다
+    monkeypatch.setattr(model_server, "MAX_PENDING_REQUESTS", 1)
+    release = threading.Event()
+
+    def encode(texts: list[str]) -> tuple[list[list[float]], int]:
+        release.wait(timeout=5)
+        return [[1.0] for _ in texts], 1
+
+    app = model_server.embedding_app(encode, name="BAAI/bge-m3")
+    transport = httpx.ASGITransport(app=app)
+
+    # 실행
+    async with httpx.AsyncClient(transport=transport, base_url="http://model.test") as client:
+        first = asyncio.create_task(client.post("/v1/embeddings", json={"input": ["가"]}))
+        await asyncio.sleep(0.2)
+        second = await client.post("/v1/embeddings", json={"input": ["나"]})
+        release.set()
+        done = await first
+
+    # 확인
+    assert done.status_code == status.HTTP_200_OK
+    assert second.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert second.headers["Retry-After"] == "1"

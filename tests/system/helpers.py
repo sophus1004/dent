@@ -330,3 +330,32 @@ def llm_transport(*, key: str = LLM_KEY, reply: str = "안녕하세요") -> http
     transport = httpx.MockTransport(handle)
     transport.requests = requests  # type: ignore[attr-defined]
     return transport
+
+
+def busy_transport(
+    inner: httpx.MockTransport,
+    *,
+    times: int,
+    status_code: int = 503,
+    body: dict | None = None,
+    retry_after: str = "0",
+) -> httpx.MockTransport:
+    """처음 times번은 바쁘다고 되미는(status_code + Retry-After) 가짜 서버. 그 뒤는 inner가 답한다.
+
+    받은 요청 수는 .busy_replies에.
+    """
+    busy_replies: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if len(busy_replies) < times:
+            busy_replies.append(request)
+            return httpx.Response(
+                status_code,
+                headers={"Retry-After": retry_after},
+                json=body if body is not None else {"error": "바쁨"},
+            )
+        return inner.handle_request(request)
+
+    transport = httpx.MockTransport(handle)
+    transport.busy_replies = busy_replies  # type: ignore[attr-defined]
+    return transport

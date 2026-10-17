@@ -1,4 +1,5 @@
-// 시스템 API를 부르는 함수: 올린 파일, 허깅페이스 미리 보기, 데이터셋 목록, 가져오기 기록, 작업, 내보낸 파일, 외부 모델 연결.
+// 시스템 API를 부르는 함수: 올린 파일, 허깅페이스 미리 보기, 데이터셋 목록, 가져오기 기록, 작업, 작업 실행기, 내보낸 파일,
+// 외부 모델 연결.
 // 주소 하나에 함수 하나이고, 이름은 백엔드 라우터 함수와 같다. 모두 /api/v1 아래에 있다.
 // 실패하면 http.ts의 ApiError(한국어 문장)를 던진다. 모듈만의 API는 각 모듈의 api.ts에 있다.
 import { request, upload, type UploadOptions } from '@/system/http'
@@ -19,6 +20,7 @@ import type {
   JobPageRead,
   JobQuery,
   JobRead,
+  WorkersRead,
 } from '@/system/types'
 
 const BASE = '/api/v1'
@@ -91,6 +93,18 @@ export function listJobs(query: JobQuery, signal?: AbortSignal): Promise<JobPage
   }
   const search = params.toString()
   return request('GET', `${BASE}/jobs${search ? `?${search}` : ''}`, { signal })
+}
+
+// ---------- 작업 실행기 ----------
+
+/** 정한 작업 실행기 수 · 번호마다 상태와 도는 작업 · 도는 작업과 대기 작업 수. */
+export function getWorkers(signal?: AbortSignal): Promise<WorkersRead> {
+  return request('GET', `${BASE}/workers`, { signal })
+}
+
+/** 작업 실행기 수를 바꾼다. 관리 프로세스가 몇 초 안에 늘리거나 줄인다. */
+export function updateWorkers(count: number): Promise<WorkersRead> {
+  return request('PUT', `${BASE}/workers`, { body: { count } })
 }
 
 // ---------- 내보낸 파일 ----------

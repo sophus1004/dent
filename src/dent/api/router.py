@@ -5,20 +5,31 @@
 
 from fastapi import APIRouter
 
-from dent.api import connections, datasets, exports, helper, huggingface, imports, jobs, uploads
+from dent.api import (
+    connections,
+    datasets,
+    exports,
+    helper,
+    huggingface,
+    imports,
+    jobs,
+    uploads,
+    workers,
+)
 from dent.modules.classification import router as classification
 from dent.modules.generation import router as generation
 from dent.modules.retrieval import router as retrieval
 
 api_router = APIRouter(prefix="/api/v1")
 
-# 시스템: 올린 파일, 허깅페이스 미리 보기, 데이터셋 목록, 가져오기 기록, 작업 진행률, 외부 모델 연결, 도우미,
-# 내보낸 파일
+# 시스템: 올린 파일, 허깅페이스 미리 보기, 데이터셋 목록, 가져오기 기록, 작업 진행률, 작업 실행기,
+# 외부 모델 연결, 도우미, 내보낸 파일
 api_router.include_router(uploads.router)
 api_router.include_router(huggingface.router)
 api_router.include_router(datasets.router)
 api_router.include_router(imports.router)
 api_router.include_router(jobs.router)
+api_router.include_router(workers.router)
 api_router.include_router(connections.router)
 api_router.include_router(helper.router)
 api_router.include_router(exports.router)

@@ -9,7 +9,13 @@ from dent.system import llm
 from dent.system.exceptions import ExternalServiceError
 from dent.system.llm import ChatMessage
 from dent.system.models import Connection, LlmProvider
-from tests.system.helpers import LLM_KEY, LLM_URL, llm_transport, refused_transport
+from tests.system.helpers import (
+    LLM_KEY,
+    LLM_URL,
+    busy_transport,
+    llm_transport,
+    refused_transport,
+)
 
 QUESTION = [ChatMessage(role="system", content="짧게"), ChatMessage(role="user", content="안녕?")]
 
@@ -179,6 +185,32 @@ async def test_complete_tells_no_credit_from_rate_limit(error, reason):
     with pytest.raises(ExternalServiceError) as caught:
         await llm.complete(_connection(), messages=QUESTION, max_tokens=50, transport=transport)
     assert caught.value.message == f"LLM 답을 받지 못했습니다 ({reason})."
+
+
+async def test_complete_waits_when_provider_rate_limits_with_retry_after():
+    # 준비: 공급자가 요청 한도로 한 번 되민다
+    rate_limited = {"error": {"type": "requests", "code": "rate_limit_exceeded"}}
+    transport = busy_transport(llm_transport(), times=1, status_code=429, body=rate_limited)
+
+    # 실행
+    content = await llm.complete(
+        _connection(), messages=QUESTION, max_tokens=50, transport=transport
+    )
+
+    # 확인
+    assert len(transport.busy_replies) == 1
+    assert content == "안녕하세요"
+
+
+async def test_complete_does_not_wait_when_credit_is_gone_even_with_retry_after():
+    # 준비
+    no_credit = {"error": {"type": "insufficient_quota", "code": "insufficient_quota"}}
+    transport = busy_transport(llm_transport(), times=5, status_code=429, body=no_credit)
+
+    # 실행 · 확인
+    with pytest.raises(ExternalServiceError, match="크레딧 없음"):
+        await llm.complete(_connection(), messages=QUESTION, max_tokens=50, transport=transport)
+    assert len(transport.busy_replies) == 1
 
 
 TOOLS = [

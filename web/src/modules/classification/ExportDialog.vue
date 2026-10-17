@@ -15,6 +15,7 @@ import { Check, Download, FileDown, LoaderCircle, TriangleAlert } from '@lucide/
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 
 import { GRADES } from '@/system/diagnosis/grades'
+import { activeExports } from '@/system/exports/activeExports'
 import ExportFiles from '@/system/exports/ExportFiles.vue'
 import { fmt } from '@/system/format'
 import { errorMessage } from '@/system/http'
@@ -68,6 +69,7 @@ const canCreate = computed(
 watch(open, (isOpen) => {
   if (!isOpen) return
   made.value = []
+  void showActive()
   createError.value = null
   schedulePreview()
 })
@@ -94,6 +96,12 @@ async function loadPreview(): Promise<void> {
   } catch (error) {
     previewError.value = errorMessage(error)
   }
+}
+
+/** 만드는 중인 파일이 있으면 고르는 화면 대신 그 진행을 보인다(창을 다시 열었을 때). */
+async function showActive(): Promise<void> {
+  const active = await activeExports(props.dataset.id)
+  if (open.value && !made.value.length && active.length) made.value = active
 }
 
 async function create(): Promise<void> {
@@ -262,7 +270,8 @@ const COLUMN_CHIP = 'rounded-[5px] bg-muted px-1.5 font-mono text-[11px] text-mu
         <ExportFiles :items="made" />
         <div class="flex items-center gap-2 border-t px-[18px] py-3">
           <span class="text-meta text-muted-foreground">7일 보관</span>
-          <Button type="button" variant="outline" class="ml-auto" @click="open = false">닫기</Button>
+          <Button type="button" variant="quiet" class="ml-auto" data-action="export-again" @click="made = []">다른 파일 만들기</Button>
+          <Button type="button" variant="outline" @click="open = false">닫기</Button>
         </div>
       </template>
     </DialogContent>

@@ -1,5 +1,8 @@
 """학습할 모델의 토크나이저 테스트: tokenizer.json 하나만 받아 storage/models/tokenizers에 두고, 대화 길이를 토큰으로 센다."""
 
+import asyncio
+from collections.abc import AsyncIterator
+
 import httpx
 import pytest
 from tokenizers import Tokenizer, models, pre_tokenizers
@@ -38,8 +41,41 @@ async def test_ensure_tokenizer_downloads_only_tokenizer_json_once():
 
     # 확인: 한 번만 받고 storage/models/tokenizers/acme--tiny/ 아래에 둔다
     assert path == again == settings.embedded_models_path / "tokenizers/acme--tiny/tokenizer.json"
-    assert path.exists() and not path.with_suffix(".part").exists()
+    assert path.exists() and [item.name for item in path.parent.iterdir()] == ["tokenizer.json"]
     assert len(requests) == 1
+
+
+async def test_ensure_tokenizer_keeps_whole_file_when_two_jobs_download_at_once():
+    # 준비: 두 작업이 같은 모델의 토크나이저를 함께 받는다(데이터셋이 달라 함께 돈다)
+    settings = get_settings()
+
+    # 실행
+    paths = await asyncio.gather(
+        tokenizers.ensure_tokenizer(settings, "acme/both", transport=_hub_for("acme/both")),
+        tokenizers.ensure_tokenizer(settings, "acme/both", transport=_hub_for("acme/both")),
+    )
+
+    # 확인: 깨지지 않은 파일 하나만 남고 받는 중이던 파일은 없다
+    assert paths[0] == paths[1]
+    assert paths[0].read_bytes() == _tokenizer_json()
+    assert [path.name for path in paths[0].parent.iterdir()] == ["tokenizer.json"]
+
+
+def _hub_for(repo: str) -> httpx.MockTransport:
+    """조각조각 천천히 내려 주는 가짜 허깅페이스(받는 동안 다른 작업과 겹치게)."""
+
+    async def chunks() -> AsyncIterator[bytes]:
+        content = _tokenizer_json()
+        for start in range(0, len(content), 64):
+            await asyncio.sleep(0)
+            yield content[start : start + 64]
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        if request.url.path == f"/{repo}/resolve/main/tokenizer.json":
+            return httpx.Response(200, content=chunks())
+        return httpx.Response(404)
+
+    return httpx.MockTransport(reply)
 
 
 async def test_ensure_tokenizer_rejects_bad_name_and_reports_missing_repo():

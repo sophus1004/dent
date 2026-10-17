@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dent.system import jobs as job_service
 from dent.system.db import get_db
-from dent.system.models import JobStatus
+from dent.system.models import Job, JobStatus
 from dent.system.schemas import JobCountsRead, JobPageRead, JobRead
 
 router = APIRouter(prefix="/jobs", tags=["작업"])
@@ -50,8 +50,9 @@ async def list_jobs(
         limit=limit,
         offset=offset,
     )
+    waiting = await job_service.waiting_reasons(db, jobs=page.items)
     return JobPageRead(
-        items=[JobRead.model_validate(job) for job in page.items],
+        items=[_job_read(job, waiting=waiting) for job in page.items],
         total=page.total,
         counts=JobCountsRead(**page.counts),
     )
@@ -59,6 +60,14 @@ async def list_jobs(
 
 @router.get("/{job_id}")
 async def get_job(job_id: int, db: Db) -> JobRead:
-    """작업 하나의 상태와 진행률. 없으면 404."""
+    """작업 하나의 상태와 진행률(대기 중이면 기다리는 까닭). 없으면 404."""
     job = await job_service.get_job(db, job_id=job_id)
-    return JobRead.model_validate(job)
+    waiting = await job_service.waiting_reasons(db, jobs=[job])
+    return _job_read(job, waiting=waiting)
+
+
+def _job_read(job: Job, *, waiting: dict[int, str]) -> JobRead:
+    """작업 한 건의 응답 모양. 대기 중이면 기다리는 까닭을 붙인다."""
+    read = JobRead.model_validate(job)
+    read.waiting = waiting.get(job.id)
+    return read

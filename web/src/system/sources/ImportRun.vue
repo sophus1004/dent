@@ -19,7 +19,7 @@ import { RouterLink } from 'vue-router'
 import { getImport } from '@/system/api'
 import { durationText, fmt, pct } from '@/system/format'
 import { errorMessage, isAbortError } from '@/system/http'
-import { jobProgress, useJob } from '@/system/jobs'
+import { jobProgress, useJob, waitingText } from '@/system/jobs'
 import { readiness, refreshReadiness } from '@/system/readiness'
 import type { ImportPhase } from '@/system/sources/source'
 import type { ImportRead, ImportSource } from '@/system/types'
@@ -89,7 +89,7 @@ const ratio = computed(() => (job.value ? jobProgress(job.value) : null))
 // 진행 줄의 상태 낱말
 const statusWord = computed(() => {
   if (phase.value === 'starting' || !job.value) return '시작 중'
-  if (job.value.status === 'queued') return '대기'
+  if (job.value.status === 'queued') return waitingText(job.value)
   if (job.value.progress_total === null) return '원본 읽는 중'
   return '가져오는 중'
 })

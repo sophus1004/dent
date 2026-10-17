@@ -16,6 +16,7 @@ from dent.system.models import Connection, ConnectionRole, EmbeddingModel
 from tests.system.helpers import (
     EMBEDDING_MODEL,
     EMBEDDING_URL,
+    busy_transport,
     embedding_transport,
     refused_transport,
     vector_of,
@@ -172,6 +173,41 @@ async def test_embed_texts_fails_clearly_after_max_attempts(monkeypatch):
     # 확인
     assert len(transport.requests) == embedding.EMBEDDING_MAX_ATTEMPTS
     assert "HTTP 503" in caught.value.message
+
+
+async def test_embed_texts_waits_while_server_pushes_back_without_using_attempts():
+    # 준비: 서버가 시도 횟수보다 많이 되민다(다른 작업의 임베딩을 계산하는 중)
+    busy = embedding.EMBEDDING_MAX_ATTEMPTS + 2
+    transport = busy_transport(vector_transport(dim=4), times=busy)
+
+    # 실행
+    vectors = await embedding.embed_texts(_connection(), ["안녕"], transport=transport)
+
+    # 확인
+    assert len(transport.busy_replies) == busy
+    assert vectors == [vector_of("안녕", dim=4)]
+
+
+async def test_embed_texts_fails_when_server_keeps_pushing_back_past_the_limit(monkeypatch):
+    # 준비
+    monkeypatch.setattr(embedding, "EMBEDDING_BUSY_MAX_WAIT_S", 2.0)
+    monkeypatch.setattr(embedding, "EMBEDDING_RETRY_BASE_S", 0)
+    transport = busy_transport(vector_transport(dim=4), times=100, retry_after="1")
+
+    # 실행 · 확인
+    with pytest.raises(ExternalServiceError, match="HTTP 503"):
+        await embedding.embed_texts(_connection(), ["안녕"], transport=transport)
+
+
+async def test_check_embedding_server_reports_busy_server_as_connected():
+    # 실행
+    result = await embedding.check_embedding_server(
+        _connection(), transport=busy_transport(vector_transport(dim=4), times=1)
+    )
+
+    # 확인
+    assert result.ok
+    assert result.detail == embedding.BUSY_DETAIL
 
 
 async def test_embed_texts_does_not_retry_rejected_request():

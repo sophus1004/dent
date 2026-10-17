@@ -19,6 +19,7 @@ import { errorMessage, isAbortError } from '@/system/http'
 import { useJobAnnouncer } from '@/system/jobAnnounce'
 import { markJobsSeen } from '@/system/jobFeed'
 import { findJobKind, jobKindName, jobKindOptions, progressText } from '@/system/jobKinds'
+import { waitingText } from '@/system/jobs'
 import TopBar from '@/system/layout/TopBar.vue'
 import { useModules } from '@/system/module'
 import JobPanel from '@/system/pages/JobPanel.vue'
@@ -175,7 +176,10 @@ const verdict = computed(() => {
   const current = counts.value
   if (!current) return null
   if (current.failed > 0) return { tone: 'bad', text: `실패 ${fmt(current.failed)} · 고칠 것` } as const
-  if (current.running + current.queued > 0) return { tone: 'busy', text: `도는 중 ${fmt(current.running + current.queued)}` } as const
+  if (current.running + current.queued > 0) {
+    const parts = [current.running ? `도는 중 ${fmt(current.running)}` : null, current.queued ? `대기 ${fmt(current.queued)}` : null]
+    return { tone: 'busy', text: parts.filter(Boolean).join(' · ') } as const
+  }
   if (allCount.value === 0) return { tone: 'none', text: '작업 없음' } as const
   return { tone: 'good', text: '문제 없음' } as const
 })
@@ -197,7 +201,7 @@ const summaryCells = computed(() => {
     { key: 'done', name: '완료', value: current.done, dot: 'bg-success' },
     { key: 'failed', name: '실패', value: current.failed, dot: 'bg-danger' },
     { key: 'canceled', name: '멈춤', value: current.canceled, dot: 'ring-[1.5px] ring-subtle-foreground ring-inset' },
-    { key: 'active', name: '도는 중', value: current.running + current.queued, dot: 'bg-primary' },
+    { key: 'active', name: '도는 중 · 대기', value: current.running + current.queued, dot: 'bg-primary' },
   ]
 })
 
@@ -271,6 +275,8 @@ useEventListener(document, 'keydown', (event: KeyboardEvent) => {
 
 function reasonText(job: JobRead): string {
   if (job.status === 'canceled') return '멈추기 누름'
+  if (job.status === 'queued') return waitingText(job)
+  if (job.status === 'running' && job.worker !== null) return `작업 실행기 ${job.worker}`
   return job.error ?? ''
 }
 </script>

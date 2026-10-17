@@ -7,6 +7,7 @@ API 서버의 /readyz도 같은 함수를 한 번씩만 시도해서 쓴다.
 import asyncio
 import logging
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -81,9 +82,10 @@ def check_storage(settings: Settings, *, warn_low_disk: bool = True) -> StorageI
     try:
         for name in STORAGE_SUBDIRS:
             (root / name).mkdir(parents=True, exist_ok=True)
-        probe = root / ".write-check"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink()
+        # 확인 파일은 이름이 겹치지 않게 만든다. 작업 실행기 여럿 · API 서버가 함께 확인하면 고정된 이름은
+        # 남이 만든 파일을 지우거나 이미 지워진 파일을 지우려다 '쓸 수 없음'이 된다.
+        with tempfile.NamedTemporaryFile(dir=root, prefix=".write-check-") as probe:
+            probe.write(b"ok")
     except OSError:
         raise StartupError(f"storage 폴더에 쓸 수 없습니다: {root}. 권한을 확인하세요.") from None
 

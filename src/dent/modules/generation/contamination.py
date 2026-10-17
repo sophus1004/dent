@@ -16,12 +16,14 @@
 import asyncio
 import itertools
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import numpy as np
 from sqlalchemy import delete, func, insert, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -38,6 +40,8 @@ from dent.system import connections, contamination, embedding, jobs, llm
 from dent.system.exceptions import ExternalServiceError
 from dent.system.models import Connection, ConnectionRole, Dataset, EmbeddingModel, Job
 from dent.system.text import make_text_hash, normalize_text
+
+logger = logging.getLogger("dent.generation.contamination")
 
 CONTAMINATION_JOB_KIND = "contamination"
 
@@ -157,21 +161,13 @@ async def overlap(db: AsyncSession, *, dataset_id: int) -> tuple[int, int]:
 
 
 async def queue_check(db: AsyncSession, *, dataset_id: int) -> Job | None:
-    """이 데이터셋의 대조 작업을 넣는다(평가셋이 없거나 자기가 평가셋이거나 이미 기다리면 넣지 않음). 커밋은 부른 쪽이 한다."""
+    """이 데이터셋의 대조 작업을 넣는다(평가셋이 없거나 자기가 평가셋이면 넣지 않음). 커밋은 부른 쪽이 한다.
+
+    이미 기다리는 대조 작업이 있으면 새로 넣지 않고 그 작업을 돌려준다(작업 실행기 여럿이 평가셋 가져오기를
+    함께 마쳐 동시에 넣어도 하나만 남는다).
+    """
     found = await generation_service.find_settings(db, dataset_id=dataset_id)
     if found.is_eval or await eval_signature(db) is None:
-        return None
-    waiting = await db.scalar(
-        select(func.count())
-        .select_from(Job)
-        .where(
-            Job.module == generation_service.MODULE_NAME,
-            Job.kind == CONTAMINATION_JOB_KIND,
-            Job.dataset_id == dataset_id,
-            Job.status == "queued",
-        )
-    )
-    if waiting:
         return None
     return await jobs.enqueue_job(
         db,
@@ -179,6 +175,9 @@ async def queue_check(db: AsyncSession, *, dataset_id: int) -> Job | None:
         kind=CONTAMINATION_JOB_KIND,
         params={"dataset_id": dataset_id},
         dataset_id=dataset_id,
+        dedupe_key=jobs.dedupe_key_of(
+            generation_service.MODULE_NAME, CONTAMINATION_JOB_KIND, dataset_id
+        ),
     )
 
 
@@ -208,8 +207,35 @@ async def run_check(
     """데이터셋 하나를 평가셋들과 대조해 겹친 지시를 적는다(앞서 적은 것은 지운다). 결과 요약.
 
     임베딩 · LLM이 안 되면 작업을 실패시키지 않고 할 수 있는 방법까지만 한다(쓴 방법을 설정에 남긴다).
+    대조는 다른 데이터셋(평가셋)을 읽는 작업이라, 그사이 평가셋의 문항이 지워지면(평가셋을 지움 · 가져오기 실패 ·
+    휴지통 비우기, 다른 작업 실행기가 함께 돌 수 있다) 겹친 줄을 적지 못한다. 그때는 대조를 다시 넣고 끝낸다.
     transport · llm_transport는 테스트가 가짜 임베딩 · LLM을 줄 때만.
     """
+    try:
+        return await _run_check(
+            db,
+            dataset_id=dataset_id,
+            job_id=job_id,
+            transport=transport,
+            llm_transport=llm_transport,
+        )
+    except IntegrityError:
+        await db.rollback()
+        logger.info("데이터셋 %d번: 대조하는 동안 평가셋이 바뀌어 다시 대조합니다.", dataset_id)
+        again = await queue_check(db, dataset_id=dataset_id)
+        await db.commit()
+        return {"restarted": again is not None}
+
+
+async def _run_check(
+    db: AsyncSession,
+    *,
+    dataset_id: int,
+    job_id: int,
+    transport: httpx.AsyncBaseTransport | None,
+    llm_transport: httpx.AsyncBaseTransport | None,
+) -> dict[str, Any]:
+    """run_check의 본문: 8-gram → 뜻으로 대조하고 적는다."""
     signature = await eval_signature(db)
     eval_ids = [dataset for dataset in await eval_dataset_ids(db) if dataset != dataset_id]
     eval_items = [

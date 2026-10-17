@@ -12,6 +12,7 @@
 import { LoaderCircle, ScanSearch, Settings2, TriangleAlert } from '@lucide/vue'
 import { computed, reactive, ref, watch } from 'vue'
 
+import { useDatasetJobs } from '@/system/datasetJobs'
 import { errorMessage } from '@/system/http'
 import { Button } from '@/system/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/system/ui/dialog'
@@ -45,7 +46,10 @@ const form = reactive({
   easy_pair_percent: 30,
 })
 const saving = ref(false)
-const scanning = ref(false)
+// 훑는 중: 이 데이터셋의 훑기 작업이 기다리거나 도는 동안(창을 닫았다 열어도 보인다). 요청을 보내는 동안도 훑는 중이다.
+const datasetJobs = useDatasetJobs(() => props.datasetId)
+const startingScan = ref(false)
+const scanning = computed(() => startingScan.value || datasetJobs.activeOf('retrieval', 'negative_scan') !== null)
 const error = ref<string | null>(null)
 
 // 거짓 오답 비율의 칸 색 경계 (보여 주기만: 5% 미만 초록 · 15% 미만 호박 · 그 위 빨강)
@@ -80,16 +84,7 @@ watch(open, (isOpen) => {
     easy_pair_percent: Math.round(settings.easy_pair_cap * 100),
   })
   error.value = null
-  scanning.value = false
 })
-
-// 훑기 작업이 끝나 설정을 다시 읽으면(새 결과) 도는 표시를 끈다.
-watch(
-  () => props.settings.negative_scan,
-  () => {
-    scanning.value = false
-  },
-)
 
 function cell(from: number, margin: number): NegativeScanCellRead | undefined {
   return scan.value?.cells.find((item) => item.rank_from === from && item.margin === margin)
@@ -109,13 +104,15 @@ function pick(from: number, margin: number): void {
 }
 
 async function runScan(): Promise<void> {
-  scanning.value = true
+  startingScan.value = true
   error.value = null
   try {
     await scanNegatives(props.datasetId)
+    await datasetJobs.refresh()
   } catch (failure) {
     error.value = errorMessage(failure)
-    scanning.value = false
+  } finally {
+    startingScan.value = false
   }
 }
 

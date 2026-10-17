@@ -180,12 +180,19 @@ export interface JobRead {
   attempts: number
   // 사용자가 멈추라고 했는지
   cancel_requested: boolean
+  // 이 작업을 꺼낸 작업 실행기 번호. 꺼내기 전이면 null
+  worker: number | null
+  // 대기 중인 까닭: dataset 같은 데이터셋의 앞 작업을 기다림 · worker 빈 작업 실행기를 기다림. 대기가 아니면 null
+  waiting: JobWaiting | null
   // 일어난 일. 시각 순
   events: JobEvent[]
   created_at: string
   started_at: string | null
   finished_at: string | null
 }
+
+// 대기 중인 작업이 기다리는 까닭
+export type JobWaiting = 'dataset' | 'worker'
 
 // 작업의 사건 한 줄. type마다 붙는 값이 다르다.
 export type JobEvent =
@@ -223,6 +230,36 @@ export interface JobQuery {
   finished_after?: string
   limit?: number
   offset?: number
+}
+
+// ---------- 작업 실행기 ----------
+
+// 작업 실행기 번호 하나의 상태: 실행 중 · 띄우는 중 · 끝나면 종료(수를 줄임) · 다시 띄우는 중 · 멈춤(너무 자주 멈춰 두었다) · 실행 중 아님
+export type WorkerSlotState = 'running' | 'starting' | 'draining' | 'restarting' | 'failed' | 'stopped'
+
+// GET /api/v1/workers의 번호 하나
+export interface WorkerSlotRead {
+  slot: number
+  state: WorkerSlotState
+  // 이 번호가 도는 작업. 없으면 null
+  job: JobRead | null
+}
+
+// GET · PUT /api/v1/workers의 답
+export interface WorkersRead {
+  // 정한 실행기 수
+  count: number
+  min_count: number
+  max_count: number
+  // 관리 프로세스가 지켜보는지. false면 수를 바꿔도 저장만 한다(실행기를 손으로 띄운 개발 실행)
+  managed: boolean
+  // 자리를 잡고 실행 중인 실행기 수
+  running: number
+  // 도는 작업 수
+  busy: number
+  // 대기 작업 수
+  queued: number
+  slots: WorkerSlotRead[]
 }
 
 // ---------- 외부 모델 연결 ----------

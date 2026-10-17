@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 import sys
 import threading
@@ -29,7 +30,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from dent.system import devices, embedded_models
@@ -57,6 +58,10 @@ NOT_READY_DETAIL = "모델을 준비하는 중입니다."
 
 # 불러오기가 예상 밖의 까닭으로 실패했을 때 /health에 두는 까닭 (자세한 것은 로그 파일에)
 LOAD_FAILED_DETAIL = "모델을 불러오지 못했습니다. storage/logs의 로그를 확인하세요."
+
+# 되밀 때 · 기다리다 떠난 요청의 까닭
+BUSY_DETAIL = "모델 서버가 바쁩니다. 잠시 뒤에 다시 보내 주세요."
+GONE_DETAIL = "요청한 쪽이 기다리다 떠났습니다."
 
 # 장치 문제로 올리지 못했을 때의 까닭
 NO_APPLE_GPU_MESSAGE = "Apple GPU를 쓸 수 없습니다"
@@ -87,6 +92,20 @@ EMBEDDING_BATCH_TOKEN_BUDGET = 8192
 EMBEDDING_MAX_BATCH_SIZE = 16
 # 불러온 뒤 한 번 계산해 GPU 커널을 미리 준비하는 문장
 WARMUP_TEXT = "준비"
+
+# 되밀기: 기다리는 요청이 이만큼 많거나, 늘 걸리는 시간으로 어림한 기다림이 이보다 길면 받지 않고
+# 503 + Retry-After로 나중에 다시 오라고 한다. 기다린 시간도 클라이언트의 요청 시간 한도(30초)에 들어가므로
+# 그 절반 아래에서 끊는다. 작업 실행기 여럿이 이 서버를 함께 쓸 때 시간 초과로 실패하지 않게.
+MAX_PENDING_REQUESTS = 16
+MAX_QUEUE_WAIT_S = 15.0
+
+# Retry-After의 범위(초)
+MIN_RETRY_AFTER_S = 1
+MAX_RETRY_AFTER_S = 30
+
+# 요청 하나의 계산 시간 어림: 처음 값(초)과, 새로 잰 값에 주는 무게(최근 값을 더 믿는 이동 평균)
+INITIAL_ENCODE_S = 1.0
+ENCODE_TIME_WEIGHT = 0.3
 
 
 class ModelState:
@@ -407,13 +426,43 @@ def _batches(order: list[int], *, lengths: list[int]) -> Iterator[list[int]]:
         yield batch
 
 
+class Backlog:
+    """받은 요청의 줄: 기다리거나 계산 중인 수와 요청 하나의 계산 시간 어림. 되밀지 정한다."""
+
+    def __init__(self) -> None:
+        # 받았고 아직 끝나지 않은 요청 수
+        self.pending = 0
+
+        # 요청 하나의 계산 시간 어림(초)
+        self.encode_s = INITIAL_ENCODE_S
+
+    def retry_after(self) -> int | None:
+        """지금 받으면 너무 오래 기다리게 되면 다시 올 때까지의 초, 받아도 되면 None."""
+        expected_wait = self.pending * self.encode_s
+        is_full = self.pending >= MAX_PENDING_REQUESTS or expected_wait > MAX_QUEUE_WAIT_S
+        if not is_full:
+            return None
+        return math.ceil(min(max(expected_wait, MIN_RETRY_AFTER_S), MAX_RETRY_AFTER_S))
+
+    def measured(self, seconds: float) -> None:
+        """요청 하나를 계산한 시간을 어림에 더한다."""
+        self.encode_s += ENCODE_TIME_WEIGHT * (seconds - self.encode_s)
+
+
 def embedding_app(
     encode: Callable[[list[str]], tuple[list[list[float]], int]], *, name: str
 ) -> FastAPI:
-    """OpenAI 호환 임베딩 앱: POST /v1/embeddings · GET /v1/models. encode는 한 스레드에서 돈다."""
+    """OpenAI 호환 임베딩 앱: POST /v1/embeddings · GET /v1/models. encode는 한 스레드에서 돈다.
+
+    여러 작업이 함께 보내면 차례로 계산한다(먼저 온 것부터). 기다리는 요청이 너무 많으면 503 + Retry-After로
+    되밀고, 기다리다 클라이언트가 떠난 요청은 계산하지 않는다.
+    """
     app = FastAPI(title=name)
     # GPU(MPS)는 여러 스레드가 동시에 쓰면 안전하지 않아서 계산 스레드를 하나만 둔다.
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="encode")
+    # 계산 차례: 먼저 온 요청부터 하나씩. 차례가 오면 클라이언트가 아직 기다리는지 본다.
+    turn = asyncio.Lock()
+    backlog = Backlog()
 
     @app.get("/v1/models")
     async def list_models() -> dict[str, Any]:
@@ -421,16 +470,32 @@ def embedding_app(
         return {"object": "list", "data": [{"id": name, "object": "model", "owned_by": "dent"}]}
 
     @app.post("/v1/embeddings")
-    async def create_embeddings(request: EmbeddingRequest) -> dict[str, Any]:
-        """문장마다 벡터를 돌려준다. 모델 이름이 다르면 404, 문장이 너무 많으면 422."""
+    async def create_embeddings(request: EmbeddingRequest, http: Request) -> dict[str, Any]:
+        """문장마다 벡터를 돌려준다. 모델 이름이 다르면 404, 문장이 너무 많으면 422, 바쁘면 503."""
         if request.model and request.model != name:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"모델 '{request.model}'이 없습니다.")
         texts = [request.input] if isinstance(request.input, str) else request.input
         if len(texts) > EMBEDDING_MAX_INPUTS:
             message = f"한 요청에 {EMBEDDING_MAX_INPUTS}개까지 보낼 수 있습니다."
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, message)
-        loop = asyncio.get_running_loop()
-        vectors, tokens = await loop.run_in_executor(executor, encode, texts)
+        retry_after = backlog.retry_after()
+        if retry_after is not None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                BUSY_DETAIL,
+                headers={"Retry-After": str(retry_after)},
+            )
+        backlog.pending += 1
+        try:
+            async with turn:
+                if await http.is_disconnected():
+                    raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, GONE_DETAIL)
+                started = time.monotonic()
+                loop = asyncio.get_running_loop()
+                vectors, tokens = await loop.run_in_executor(executor, encode, texts)
+                backlog.measured(time.monotonic() - started)
+        finally:
+            backlog.pending -= 1
         return {
             "object": "list",
             "data": [

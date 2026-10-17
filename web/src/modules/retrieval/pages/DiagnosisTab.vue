@@ -11,6 +11,7 @@ import { Clock, FileText, Layers, LoaderCircle, MessageCircleQuestion, Pickaxe, 
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import { useDatasetJobs } from '@/system/datasetJobs'
 import CheckGroup from '@/system/diagnosis/CheckGroup.vue'
 import { helperChanged } from '@/system/helper/helperSignals'
 import { clockText, fmt } from '@/system/format'
@@ -73,7 +74,7 @@ const stageUnit = computed(() => (selected.value === 1 ? '문서' : selected.val
 
 watch(datasetId, loadOverview, { immediate: true })
 // 도우미 · 작업이 데이터를 바꾸면 조용히 다시 읽는다(회색 막대 없이 숫자만 바꿔 끼운다).
-watch([helperChanged, jobFinished], () => {
+watch([helperChanged, () => jobFinished(datasetId.value)], () => {
   void refreshOverview()
   void analysis.reload()
 })
@@ -114,20 +115,24 @@ async function loadOverview(): Promise<void> {
 
 // ---------- 오답 찾기 · 다시 찾기 (3단계 카드) ----------
 
-const mining = ref(false)
+// 찾는 중: 이 데이터셋의 오답 찾기 작업이 기다리거나 도는 동안(다른 화면에서 돌아와도 보인다). 요청을 보내는 동안도.
+const datasetJobs = useDatasetJobs(datasetId)
+const mineJob = computed(() => datasetJobs.activeOf('retrieval', 'mine'))
+const startingMine = ref(false)
+const mining = computed(() => startingMine.value || mineJob.value !== null)
 const remineOpen = ref(false)
 
 /** 오답 찾기(모자란 질의만) 또는 다시 찾기(찾은 오답을 떼고 처음부터) 작업을 넣는다. 끝나면 알림이 온다. */
 async function startMining(again: boolean): Promise<void> {
-  mining.value = true
+  startingMine.value = true
   try {
     await (again ? remine(datasetId.value) : mine(datasetId.value))
     remineOpen.value = false
-    pushToast({ tone: 'done', title: again ? '다시 찾기' : '오답 찾기', detail: '작업 넣음 · 끝나면 알림', actions: [] })
+    await datasetJobs.refresh()
   } catch (error) {
     pushToast({ tone: 'fail', title: '오답 찾기', detail: errorMessage(error), actions: [] })
   } finally {
-    mining.value = false
+    startingMine.value = false
   }
 }
 
@@ -196,7 +201,7 @@ const targetModel = computed(() => props.dataset.settings?.target_model ?? analy
             data-action="mine"
             @click="startMining(false)"
           >
-            <Pickaxe />오답 찾기
+            <LoaderCircle v-if="mineJob" class="animate-spin" /><Pickaxe v-else />{{ mineJob ? '찾는 중' : '오답 찾기' }}
           </Button>
           <Button
             v-if="overview.negative_count"

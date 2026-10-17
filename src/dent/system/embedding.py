@@ -29,6 +29,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dent.system import backoff
 from dent.system.connections import ConnectionCheck, describe_failure
 from dent.system.exceptions import ExternalServiceError, InvalidInputError
 from dent.system.models import Connection, Embedding, EmbeddingModel
@@ -58,6 +59,13 @@ EMBEDDING_MAX_ATTEMPTS = 3
 
 # 다시 보내기 전에 기다리는 시간(초). 두 번째는 두 배를 기다린다(1초 → 2초).
 EMBEDDING_RETRY_BASE_S = 1.0
+
+# 연결을 확인할 때 서버가 되밀면(다른 작업의 임베딩을 계산하는 중) 보이는 낱말
+BUSY_DETAIL = "연결됨 · 바쁨"
+
+# 서버가 바쁘다고(429 · 503 + Retry-After) 알릴 때 요청 하나가 기다리는 시간의 합의 상한(초).
+# 작업 여럿이 내장 모델 서버를 함께 쓰면 서버가 되민다. 한 작업이 모델 서버를 몇 분 차지해도 기다린다.
+EMBEDDING_BUSY_MAX_WAIT_S = 600.0
 
 # 다시 보낼 때 부르는 함수: (몇 번째 실패인지, 실패 까닭 한 마디). 예: (1, "시간 초과")
 type RetryHandler = Callable[[int, str], Awaitable[None]]
@@ -91,6 +99,9 @@ async def check_embedding_server(
     try:
         async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
             response = await client.post(url, json=payload)
+            # 되밀면 서버는 살아 있고 다른 작업의 임베딩을 계산하는 중이다. 실패로 보이지 않는다.
+            if backoff.busy_delay(response) is not None:
+                return ConnectionCheck(ok=True, detail=BUSY_DETAIL)
             response.raise_for_status()
             vector = response.json()["data"][0]["embedding"]
     except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as error:
@@ -289,9 +300,18 @@ async def _embed_batch(
     """문장 한 묶음을 보내고 벡터를 받는다. 잠깐의 문제는 기다렸다 다시 보낸다. 안 되면 ExternalServiceError."""
     url = f"{connection.base_url}/embeddings"
     payload = {"model": connection.model, "input": texts}
-    for attempt in range(1, EMBEDDING_MAX_ATTEMPTS + 1):
+    attempt = 1
+    busy_waited = 0.0
+    while True:
         try:
             response = await client.post(url, json=payload)
+            # 서버가 바쁘다고 알리면(되밀기) 실패로 세지 않고 말한 만큼 기다렸다 다시 보낸다.
+            delay = backoff.busy_delay(response)
+            is_busy_wait = delay is not None and busy_waited + delay <= EMBEDDING_BUSY_MAX_WAIT_S
+            if delay is not None and is_busy_wait:
+                busy_waited += delay
+                await asyncio.sleep(delay)
+                continue
             response.raise_for_status()
             return _read_vectors(response.json(), count=len(texts))
         except httpx.HTTPError as error:
@@ -305,12 +325,11 @@ async def _embed_batch(
             if on_retry is not None:
                 await on_retry(attempt, describe_failure(error))
             await asyncio.sleep(EMBEDDING_RETRY_BASE_S * 2 ** (attempt - 1))
+            attempt += 1
         except (KeyError, IndexError, TypeError, ValueError):
             raise ExternalServiceError(
                 "임베딩 서버의 응답 모양이 다릅니다. OpenAI 호환 /embeddings 서버인지 확인하세요."
             ) from None
-    # 위 반복은 돌려주거나 예외를 내고 끝난다. 타입 검사기를 위해 남긴다.
-    raise ExternalServiceError("임베딩 서버 요청이 실패했습니다.")
 
 
 def _is_worth_retry(error: httpx.HTTPError) -> bool:

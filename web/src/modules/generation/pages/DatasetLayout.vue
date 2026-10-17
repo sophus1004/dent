@@ -31,6 +31,7 @@ import HelperPanel from '@/system/helper/HelperPanel.vue'
 import { helperEnter, helperLeave } from '@/system/helper/helperMotion'
 import { dateTimeText, fmt } from '@/system/format'
 import { ApiError, errorMessage, isAbortError } from '@/system/http'
+import DatasetJobs from '@/system/layout/DatasetJobs.vue'
 import TopBar from '@/system/layout/TopBar.vue'
 import { Button } from '@/system/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/system/ui/dropdown-menu'
@@ -103,7 +104,7 @@ const crumbs = computed(() => {
 })
 
 watch(datasetId, loadDataset, { immediate: true })
-watch([helperChanged, jobFinished], () => void refreshDataset())
+watch([helperChanged, () => jobFinished(datasetId.value)], () => void refreshDataset())
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => {
   controller?.abort()
@@ -224,9 +225,7 @@ function onDeleted(): void {
             </span>
             <template v-if="dataset">
               <h1 class="text-title font-semibold tracking-[-0.01em]">{{ dataset.name }}</h1>
-              <span v-if="dataset.importing" class="rounded-md bg-muted px-1.5 text-meta font-semibold text-muted-foreground">
-                가져오는 중
-              </span>
+              <DatasetJobs :dataset-id="dataset.id" />
               <span
                 v-if="dataset.settings.goal === 'preference'"
                 class="rounded-md bg-accent px-1.5 text-meta font-semibold text-accent-foreground"

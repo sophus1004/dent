@@ -1,5 +1,5 @@
 // 화면 오른쪽 아래 알림(layout/Toaster.vue가 그린다). 작업이 끝나거나 실패하면 jobFeed가 넣는다.
-// 실패는 닫을 때까지 두고, 나머지는 몇 초 뒤 저절로 닫는다. 한꺼번에 너무 많으면 오래된 것부터 뺀다.
+// 실패는 닫을 때까지 두고, 나머지는 몇 초 뒤 저절로 닫는다. 한꺼번에 너무 많으면 오래된 완료 알림부터 뺀다.
 import { ref } from 'vue'
 
 // 알림의 버튼 하나
@@ -31,10 +31,18 @@ const MAX_TOASTS = 4
 export const toasts = ref<Toast[]>([])
 let nextId = 1
 
-/** 알림을 띄운다. 실패가 아니면 몇 초 뒤 닫는다. */
+/**
+ * 알림을 띄운다. 실패가 아니면 몇 초 뒤 닫는다. 너무 많으면 오래된 완료 알림부터 뺀다(실패는 닫을 때까지 남긴다:
+ * 작업 여럿이 함께 끝나 완료 알림이 몰려도 실패가 밀려나지 않게).
+ */
 export function pushToast(toast: Omit<Toast, 'id'>): void {
   const id = nextId++
-  toasts.value = [...toasts.value, { ...toast, id }].slice(-MAX_TOASTS)
+  const next = [...toasts.value, { ...toast, id }]
+  while (next.length > MAX_TOASTS) {
+    const oldestDone = next.findIndex((item) => item.tone !== 'fail')
+    next.splice(oldestDone >= 0 ? oldestDone : 0, 1)
+  }
+  toasts.value = next
   if (toast.tone !== 'fail') setTimeout(() => closeToast(id), AUTO_CLOSE_MS)
 }
 

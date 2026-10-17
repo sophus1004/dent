@@ -195,12 +195,14 @@ async def update_settings(
         target = fields.pop("target_model") or None
         if target != settings.target_model:
             # 학습할 모델이 바뀌면 그 토크나이저로 문서 · 청크의 토큰을 다시 잰다(없으면 받는다).
+            # 이미 기다리는 길이 작업이 있으면 그것을 쓴다(돌 때 지금 설정을 읽는다).
             await jobs.enqueue_job(
                 db,
                 module=MODULE_NAME,
                 kind=LENGTH_JOB_KIND,
                 params={"dataset_id": dataset_id},
                 dataset_id=dataset_id,
+                dedupe_key=jobs.dedupe_key_of(MODULE_NAME, LENGTH_JOB_KIND, dataset_id),
             )
         settings.target_model = target
     for name, value in fields.items():

@@ -68,7 +68,7 @@ const hasNextPage = computed(() => page.value * PAGE_SIZE < total.value)
 const noAnalysis = computed(() => loadError.value !== null && loadError.value.includes('뜻 분석'))
 
 watch([datasetId, kind, decided, page], load, { immediate: true })
-watch(jobFinished, load)
+watch(() => jobFinished(datasetId.value), load)
 onBeforeUnmount(() => controller?.abort())
 
 async function load(): Promise<void> {

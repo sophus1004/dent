@@ -36,8 +36,9 @@ ACCENT = "#8a74f5"
 # 이름마다 로그의 색: 모델 서버는 강조, API · 작업 실행기는 청록
 LABEL_STYLES = {"API": "cyan", "작업": "cyan", "임베딩": ACCENT, "Jev": ACCENT}
 
-# 자식 프로세스의 로그 이름 → 짧은 이름
+# 자식 프로세스의 로그 이름 → 짧은 이름. 번호가 붙은 작업 실행기('작업 실행기 2')는 '작업 2'.
 SHORT_LABELS = {"작업 실행기": "작업", "임베딩 모델": "임베딩", "Jev 모델": "Jev"}
+WORKER_LABEL_PREFIX = "작업 실행기 "
 
 # 로그 이름 칸의 폭 (한글 두 칸 기준으로 맞춘다)
 LABEL_WIDTH = 8
@@ -101,6 +102,17 @@ class Option:
 
     # 강조로 보이는 표. 예: '지난번'
     note: str = ""
+
+
+def short_label(label: str) -> str:
+    """로그 이름의 짧은 이름: '작업 실행기' → '작업', '작업 실행기 2' → '작업 2', '임베딩 모델' → '임베딩'."""
+    if label in SHORT_LABELS:
+        return SHORT_LABELS[label]
+    if label.startswith(WORKER_LABEL_PREFIX):
+        return (
+            f"{SHORT_LABELS[WORKER_LABEL_PREFIX.strip()]} {label.removeprefix(WORKER_LABEL_PREFIX)}"
+        )
+    return label
 
 
 class Terminal:
@@ -230,14 +242,15 @@ class Terminal:
     # ---------- 로그 ----------
 
     def event(self, label: str, message: str, *, level: str | None = None) -> None:
-        """런처가 알리는 로그 한 줄: '시각  이름  (경고)  내용'. 자식 프로세스의 줄과 같은 모양이다."""
-        self.console.print(self._log_text(label, message, level))
+        """런처가 알리는 로그 한 줄: '시각  이름  (경고)  내용'. 자식 프로세스의 줄과 같은 모양(짧은 이름)이다."""
+        self.console.print(self._log_text(short_label(label), message, level))
 
     def _log_text(self, label: str, message: str, level: str | None) -> Text:
         """'시각  이름  (경고|오류)  내용' 한 줄."""
         stamp = time.strftime("%H:%M:%S")
         padded = label + " " * max(1, LABEL_WIDTH - get_cwidth(label))
-        text = Text.assemble((f"{stamp}  ", "dim"), (padded, LABEL_STYLES.get(label, "bold")))
+        style = LABEL_STYLES.get(label.split(" ")[0], "bold")
+        text = Text.assemble((f"{stamp}  ", "dim"), (padded, style))
         if level:
             text.append(f"{level}  ", style="yellow bold" if level == "경고" else "red bold")
         text.append(message)
@@ -248,8 +261,7 @@ class Terminal:
         matched = CHILD_LINE.match(line)
         if matched is None:
             return Text.assemble((f"{time.strftime('%H:%M:%S')}  ", "dim"), (line, "dim"))
-        label = SHORT_LABELS.get(matched["label"], matched["label"])
-        return self._log_text(label, matched["message"], matched["level"])
+        return self._log_text(short_label(matched["label"]), matched["message"], matched["level"])
 
     @staticmethod
     def child_level(line: str) -> str | None:

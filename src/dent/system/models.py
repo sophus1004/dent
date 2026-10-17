@@ -10,6 +10,8 @@
 - system_helper_runs: LLM 도우미 실행 한 번 (단계 · 쓴 토큰 · 바꾼 수 · 허락을 묻는 계획)
 - system_helper_events: 도우미 실행의 사건 기록 (에이전트의 말 · 도구 카드 · 결과). 화면이 이어 읽는다
 - system_exports: 내보낸 파일 (모듈이 모양을 정해 쓰고, 시스템이 보관 · 내려받기 · 정리를 한다)
+- system_flags: 설치한 DB에서 한 번만 하는 일을 했다는 표시
+- system_settings: 실행 중에 화면에서 바꾸는 시스템 설정 (예: 작업 실행기 수)
 
 모듈 테이블은 이 테이블을 참조해도 되지만, 시스템 테이블은 모듈 테이블을 모른다.
 상태 같은 고정된 값은 text + CHECK 제약으로 저장한다.
@@ -29,6 +31,7 @@ from sqlalchemy import (
     Identity,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -65,6 +68,13 @@ UPLOAD_ID_LENGTH = 32
 
 # sha256을 16진수로 쓴 길이
 SHA256_HEX_LENGTH = 64
+
+# 작업 실행기 수의 범위(번호는 1부터 MAX_WORKERS까지). 화면에서 고르는 실행기 수의 범위와 같다.
+MIN_WORKERS = 1
+MAX_WORKERS = 8
+
+# 대기 중에 같은 일이 겹쳐 들어가지 않게 하는 작업 열쇠의 최대 길이 (예: generation:contamination:12)
+DEDUPE_KEY_MAX_LENGTH = 100
 
 # JSONB 칼럼의 DB 기본값
 EMPTY_JSON_OBJECT = text("'{}'::jsonb")
@@ -181,6 +191,27 @@ class Job(Base):
         CheckConstraint(check_in("status", JobStatus), name="status"),
         # 다음 작업을 빨리 꺼내려고 대기 중인 줄만 담는 부분 인덱스를 건다.
         Index("ix_system_jobs_queued", "id", postgresql_where=text("status = 'queued'")),
+        # 데이터셋마다 가장 앞선 대기 작업을 빨리 찾으려고(같은 데이터셋은 넣은 순서대로 하나씩 꺼낸다).
+        Index(
+            "ix_system_jobs_queued_dataset",
+            "dataset_id",
+            "id",
+            postgresql_where=text("status = 'queued'"),
+        ),
+        # 데이터셋마다 도는 작업은 하나다. 작업 실행기 여럿이 동시에 꺼낼 때의 마지막 방어선.
+        Index(
+            "uq_system_jobs_running_dataset",
+            "dataset_id",
+            unique=True,
+            postgresql_where=text("status = 'running'"),
+        ),
+        # 대기 중인 작업 가운데 같은 열쇠는 하나다(넣을 때 겹치면 있던 것을 쓴다).
+        Index(
+            "uq_system_jobs_queued_dedupe",
+            "dedupe_key",
+            unique=True,
+            postgresql_where=text("status = 'queued'"),
+        ),
     )
 
     # 작업 번호
@@ -230,6 +261,13 @@ class Job(Base):
 
     # 작업 실행기가 이 작업을 처리하며 살아 있다고 알린 마지막 시각
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # 이 작업을 꺼낸 작업 실행기 번호(1부터). 꺼내기 전에는 비운다.
+    # 실행기가 죽었는지는 그 번호의 권고 잠금이 풀렸는지로 안다(끊긴 작업 되살리기).
+    worker: Mapped[int | None] = mapped_column(SmallInteger)
+
+    # 대기 중에 같은 일이 겹쳐 들어가지 않게 하는 열쇠 (예: generation:contamination:12). 없으면 비운다.
+    dedupe_key: Mapped[str | None] = mapped_column(String(DEDUPE_KEY_MAX_LENGTH))
 
     # 일어난 일을 시각 순으로 쌓는다: 시작 · 단계 · 다시 보내기 · 쓴 연결. result와 달리 덮어쓰지 않는다.
     # 한 줄은 {"type": ..., "at": ISO 시각, ...}. 작업 기록 화면의 단계 · 다시 보내기가 이것을 읽는다.
@@ -602,3 +640,23 @@ class Flag(Base):
 
     # 한 시각
     done_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Setting(Base):
+    """실행 중에 화면에서 바꾸는 시스템 설정 한 칸(열쇠 → 값). 줄이 없으면 그 설정의 기본값을 쓴다.
+
+    예: workers(작업 실행기 수). 실행하기 전에 있어야 하는 값(DB 주소 · 포트 등)은 .env에 둔다.
+    """
+
+    __tablename__ = "system_settings"
+
+    # 설정 이름 (예: workers). 설정마다 하나라서 이것이 번호다.
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+
+    # 값 (JSON). 모양은 설정마다 정한다(예: workers는 정수).
+    value: Mapped[Any] = mapped_column(JSONB)
+
+    # 바꾼 시각
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

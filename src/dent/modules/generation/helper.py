@@ -21,7 +21,7 @@
   보고          처음과 끝의 진단을 견줘 고친 검사 · 바꿈 · 비용을 싣고 LLM이 두 줄로 말한다. 실행은 여기서 끝난다.
 단계는 닿은 때 잰다(앞 단계의 고치기가 만든 문제도 잡는다. 예: 루프를 자르면 잘린 응답이 생긴다 → 남은 것).
 뜻 분석이 없으면 뜻 검사는 '뜻 분석 전'으로 건너뛴다. 시작할 때 분석이 없거나 오래됐고 임베딩이 연결돼 있으면
-분석 작업을 먼저 넣는다(작업 실행기가 넣은 순서대로 처리한다). 응답 만들기로 응답이 늘면, 뜻 분석에 기대는 단계
+분석 작업을 먼저 넣는다(작업 실행기는 같은 데이터셋의 작업을 넣은 순서대로 처리한다). 응답 만들기로 응답이 늘면, 뜻 분석에 기대는 단계
 (지시 불일치 · 안전)에 닿았을 때 분석을 다시 만든 뒤 그 단계부터 이어 도는 작업을 넣는다(이어 도는 작업은 다시 기다리지 않는다).
 허락에 답하면 같은 실행이 새 작업으로 그 단계부터 이어 돈다. 허락을 받은 일의 LLM 토큰은 실행의 비용에 더하지만
 도우미 판단의 토큰 상한(MAX_RUN_TOKENS)에는 세지 않는다(허락 카드에서 비용을 보고 허락했다).
@@ -564,7 +564,7 @@ async def _with_pairs(db: AsyncSession, *, dataset_id: int) -> bool:
 async def _refresh_analysis_if_needed(db: AsyncSession, *, dataset_id: int) -> None:
     """뜻 분석이 없거나 오래됐으면 다시 만들게 한다(임베딩이 연결돼 있고 만드는 중이 아닐 때만).
 
-    작업 실행기는 작업을 넣은 순서대로 하나씩 처리하므로, 도우미 작업은 뜻 분석이 끝난 뒤에 돈다.
+    작업 실행기는 같은 데이터셋의 작업을 넣은 순서대로 하나씩 처리하므로, 도우미 작업은 뜻 분석이 끝난 뒤에 돈다.
     """
     if await connections.get_connection(db, role=ConnectionRole.EMBEDDING) is None:
         return
@@ -1369,7 +1369,7 @@ class Helper(Agent):
         try:
             await semantic.start_analysis(self.db, dataset_id=self.dataset_id)
         except (ConflictError, InvalidInputError):
-            # 이미 만드는 중이다. 그 작업이 먼저 들어가 있으므로 이어 도는 작업보다 먼저 끝난다.
+            # 이미 만드는 중이다. 같은 데이터셋의 작업이고 먼저 들어가 있으므로 이어 도는 작업보다 먼저 끝난다.
             await self.db.rollback()
         job = await jobs.enqueue_job(
             self.db,

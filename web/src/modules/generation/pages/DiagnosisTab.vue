@@ -138,7 +138,7 @@ watch(
   },
 )
 // 작업이 데이터를 바꾸면 조용히 다시 읽는다(회색 막대 없이 숫자만 바꿔 끼운다).
-watch([jobFinished, helperChanged], () => {
+watch([() => jobFinished(datasetId.value), helperChanged], () => {
   void refreshOverview()
   void analysis.reload()
 })

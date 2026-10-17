@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, replace
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dent.system import connections, embedded_models, embedding, jev, jobs, llm
+from dent.system import connections, embedded_models, embedding, jev, jobs, llm, workers
 from dent.system.checks import check_schema as check_schema_version
 from dent.system.checks import check_storage, check_vector, connect_database
 from dent.system.config import Settings, get_settings
@@ -211,12 +211,17 @@ async def collect_readiness(
 
 
 async def _worker_status() -> Check:
-    """작업 실행기가 실행 중인지와 대기 작업 수."""
+    """작업 실행기가 몇 개 실행 중인지(정한 수 가운데) · 도는 작업 · 대기 작업 수."""
     async with get_sessionmaker()() as session:
-        running = await jobs.is_worker_running(session)
+        running = len(await jobs.running_worker_slots(session))
+        count = await workers.get_worker_count(session)
+        busy = await jobs.count_running(session)
         queued = await jobs.count_queued(session)
     if running:
-        return Check(ok=True, detail=f"실행 중 · 대기 작업 {queued}건")
+        return Check(
+            ok=True,
+            detail=f"실행 중 {running} / {count} · 도는 중 {busy} · 대기 작업 {queued}건",
+        )
     return Check(
         ok=False,
         detail=f"실행 중이 아닙니다. 가져오기와 분석이 멈춰 있습니다 (대기 작업 {queued}건).",

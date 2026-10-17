@@ -14,7 +14,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dent.system import datasets, jobs, uploads
-from dent.system.exceptions import NotFoundError
+from dent.system.exceptions import ConflictError, NotFoundError
 from dent.system.models import Import, ImportSource, ImportStatus
 
 # 가져오기 작업의 종류. 작업 실행기는 (모듈 이름, IMPORT_JOB_KIND)로 모듈의 처리 함수를 찾는다.
@@ -22,6 +22,8 @@ IMPORT_JOB_KIND = "import"
 
 # 건너뛴 줄 가운데 기록으로 남기는 수. 나머지는 수만 센다.
 SKIPPED_LINES_KEPT = 100
+
+UPLOAD_IMPORTING_MESSAGE = "이 파일을 이미 가져오는 중입니다. 끝난 뒤에 파일을 다시 올려 주세요."
 
 
 async def create_import(
@@ -33,10 +35,19 @@ async def create_import(
     source_name: str,
     options: dict[str, Any],
 ) -> Import:
-    """가져오기 기록을 만들고 작업을 대기열에 넣는다.
+    """가져오기 기록을 만들고 작업을 대기열에 넣는다. 같은 올린 파일을 이미 가져오는 중이면 ConflictError.
 
     커밋은 부른 쪽이 한다(새 데이터셋과 기록과 작업을 한 번에 저장하려고).
     """
+    # 가져오기는 끝나면 원본 파일을 지운다. 같은 파일을 가져오기 둘이 함께 읽으면 먼저 끝난 쪽이 지운다.
+    upload_id = options.get("upload_id")
+    is_same_file_importing = (
+        source == ImportSource.FILE
+        and isinstance(upload_id, str)
+        and await uploads.is_upload_importing(db, upload_id=upload_id)
+    )
+    if is_same_file_importing:
+        raise ConflictError(UPLOAD_IMPORTING_MESSAGE)
     import_row = Import(
         dataset_id=dataset_id, source=source, source_name=source_name, options=options
     )

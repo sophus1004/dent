@@ -8,6 +8,7 @@ storage/models/tokenizers/<소유자--이름>/에 받는다(.part에 받고 다 
 """
 
 import re
+import uuid
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -58,7 +59,9 @@ async def ensure_tokenizer(
     path = tokenizer_path(settings, model)
     if path.exists():
         return path
-    partial = path.with_suffix(".part")
+    # 받는 중인 파일은 받을 때마다 다른 이름이다. 작업 둘이 같은 모델을 함께 받으면(데이터셋이 달라 함께 돈다)
+    # 같은 이름은 서로의 파일을 덮어써 깨진 파일이 남는다. 다 받은 것만 옮겨 넣는다(옮기기는 한 번에 된다).
+    partial = path.with_name(f"{path.name}.{uuid.uuid4().hex}.part")
     try:
         await huggingface.download(
             url=RESOLVE_URL.format(repo=model, file=TOKENIZER_FILE),
@@ -66,13 +69,14 @@ async def ensure_tokenizer(
             repo=model,
             transport=transport,
         )
+        partial.replace(path)
     except NotFoundError:
-        partial.unlink(missing_ok=True)
         raise NotFoundError(
             f"{model}의 {TOKENIZER_FILE}을 찾지 못했습니다. 이름을 확인하거나, 동의가 필요한 모델이면 "
             ".env의 HF_TOKEN을 넣으세요."
         ) from None
-    partial.replace(path)
+    finally:
+        partial.unlink(missing_ok=True)
     load.cache_clear()
     return path
 

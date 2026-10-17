@@ -8,7 +8,7 @@ from dent.system import jev
 from dent.system.connections import new_connection
 from dent.system.exceptions import ExternalServiceError
 from dent.system.models import Connection, ConnectionRole
-from tests.system.helpers import JEV_URL, jev_transport, refused_transport
+from tests.system.helpers import JEV_URL, busy_transport, jev_transport, refused_transport
 
 QUESTIONS = {
     "q": {
@@ -113,3 +113,17 @@ async def test_decide_raises_external_service_error_when_server_is_down():
 
     # 확인
     assert "연결 거부" in caught.value.message
+
+
+async def test_decide_waits_while_server_pushes_back():
+    # 준비: 작업 여럿이 함께 물어 서버가 두 번 되민다
+    transport = busy_transport(jev_transport(), times=2)
+
+    # 실행
+    decision = await jev.decide(
+        _connection(), state={"text": "안녕"}, questions=QUESTIONS, transport=transport
+    )
+
+    # 확인
+    assert len(transport.busy_replies) == 2
+    assert decision.answers["q"].choice == "yes"

@@ -1,5 +1,5 @@
 <!--
-  앱의 틀: 왼쪽 사이드바, 오른쪽 지금 화면, 그리고 ⌘K 팔레트와 연결 설정 대화상자, 오른쪽 아래 알림.
+  앱의 틀: 왼쪽 사이드바, 오른쪽 지금 화면, 그리고 ⌘K 팔레트와 연결 설정 · 작업 실행기 대화상자, 오른쪽 아래 알림.
   화면은 저마다 맨 위에 상단 바를 둔다.
   켤 때 /readyz 묻기와 작업 결과 살피기(끝난 작업 알림 · 확인 안 한 실패 수)를 시작하고,
   파일을 받는 칸 밖에 끌어 놓은 파일을 브라우저가 열지 않게 막는다.
@@ -18,6 +18,7 @@ import Toaster from '@/system/layout/Toaster.vue'
 import { startReadinessPolling } from '@/system/readiness'
 import { preventFileDropOutsideZones } from '@/system/sources/fileDrop'
 import { TooltipProvider } from '@/system/ui/tooltip'
+import WorkersDialog from '@/system/workers/WorkersDialog.vue'
 
 // 툴팁이 뜨기까지 기다리는 시간(밀리초)
 const TOOLTIP_DELAY_MS = 200
@@ -45,6 +46,7 @@ onMounted(() => {
     </div>
     <CommandPalette v-model:open="isPaletteOpen" />
     <ConnectionDialog />
+    <WorkersDialog />
     <Toaster />
   </TooltipProvider>
 </template>

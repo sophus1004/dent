@@ -94,7 +94,7 @@ const lastNumber = computed(() => firstNumber.value + rowIds.value.length - 1)
 const hasNextPage = computed(() => current.value.page * PAGE_SIZE < total.value)
 
 watch(requestKey, loadPage, { immediate: true })
-watch([helperChanged, jobFinished], loadPage)
+watch([helperChanged, () => jobFinished(datasetId.value)], loadPage)
 
 async function loadPage(): Promise<void> {
   if (current.value.view === 'map') return

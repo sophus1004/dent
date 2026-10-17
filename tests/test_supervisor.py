@@ -1,5 +1,5 @@
 """관리 프로세스 테스트: 기록 · 종료 요청, 자식 출력 거르기, 진행 알림 칸 · 한 줄씩 알리기, 자식에게 넘기는 환경 변수,
-종료 요청이 오면 지켜보기를 멈춤."""
+종료 요청이 오면 지켜보기를 멈춤, 작업 실행기 늘리기 · 줄이기 · 멈춘 번호만 다시 띄우기 · 함께 종료."""
 
 import io
 import json
@@ -11,7 +11,7 @@ import pytest
 from rich.console import Console
 
 from dent import supervisor
-from dent.system import embedded_models
+from dent.system import embedded_models, workers
 from dent.system.config import Settings
 from dent.system.embedded_models import ModelChoice, ServerPhase, ServerState
 from dent.system.models import ConnectionRole
@@ -168,3 +168,133 @@ def test_report_models_tells_failure_as_error(tmp_path: Path, monkeypatch: pytes
         buffer.getvalue().splitlines()[0][10:]
         == "Jev     오류  GPU 2번이 없습니다 · 이 PC의 GPU 1개"
     )
+
+
+# ---------- 작업 실행기 늘리기 · 줄이기 · 다시 띄우기 ----------
+
+
+class _FakeWorker:
+    """가짜 작업 실행기 프로세스: 종료하라고 하면 하던 작업이 끝난 것으로 치고 code로 끝난다."""
+
+    def __init__(self, slot: int) -> None:
+        self.slot = slot
+        self.code: int | None = None
+        self.asked_to_stop = False
+
+    def poll(self) -> int | None:
+        return self.code
+
+    def terminate(self) -> None:
+        self.asked_to_stop = True
+
+    def send_signal(self, _signum: int) -> None:
+        self.asked_to_stop = True
+
+
+def _fake_spawns(monkeypatch: pytest.MonkeyPatch) -> list[_FakeWorker]:
+    spawned: list[_FakeWorker] = []
+
+    def spawn(slot: int, **_kwargs: object) -> _FakeWorker:
+        worker = _FakeWorker(slot)
+        spawned.append(worker)
+        return worker
+
+    monkeypatch.setattr(supervisor, "_spawn_worker", spawn)
+    return spawned
+
+
+def _pool_kwargs(tmp_path: Path) -> dict:
+    term, _buffer = _terminal()
+    return {
+        "env": {},
+        "output": supervisor.ChildOutput(term),
+        "settings": _settings(tmp_path),
+    }
+
+
+def test_sync_pool_spawns_missing_slots_and_drains_extra_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # 준비
+    spawned = _fake_spawns(monkeypatch)
+    pool = supervisor.WorkerPool()
+    kwargs = _pool_kwargs(tmp_path)
+
+    # 실행: 넷으로 띄우고 둘로 줄인다
+    supervisor.sync_pool(pool, count=4, **kwargs)
+    supervisor.sync_pool(pool, count=2, **kwargs)
+
+    # 확인: 3 · 4에만 종료하라고 알리고, 끝날 때까지 '끝나면 종료'로 둔다
+    assert [worker.slot for worker in spawned] == [1, 2, 3, 4]
+    assert [worker.asked_to_stop for worker in spawned] == [False, False, True, True]
+    assert pool.states[3] is workers.SlotState.DRAINING
+    assert workers.read_pool_state(kwargs["settings"]) == {
+        1: workers.SlotState.STARTING,
+        2: workers.SlotState.STARTING,
+        3: workers.SlotState.DRAINING,
+        4: workers.SlotState.DRAINING,
+    }
+
+
+def test_reap_workers_keeps_drained_slot_stopped_and_respawns_it_when_count_grows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # 준비: 넷 → 셋으로 줄였고, 4가 하던 작업을 끝내고 종료했다
+    spawned = _fake_spawns(monkeypatch)
+    pool = supervisor.WorkerPool()
+    kwargs = _pool_kwargs(tmp_path)
+    term, _buffer = _terminal()
+    supervisor.sync_pool(pool, count=4, **kwargs)
+    supervisor.sync_pool(pool, count=3, **kwargs)
+    spawned[3].code = 0
+
+    # 실행
+    supervisor.reap_workers(pool, term=term, **kwargs)
+    stopped = pool.states[4]
+    supervisor.sync_pool(pool, count=4, **kwargs)
+
+    # 확인: 줄여서 끝난 번호는 다시 띄우지 않다가, 수를 늘리면 다시 띄운다
+    assert stopped is workers.SlotState.STOPPED
+    assert [worker.slot for worker in spawned] == [1, 2, 3, 4, 4]
+
+
+def test_reap_workers_respawns_crashed_slot_until_it_crashes_too_often(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # 준비
+    spawned = _fake_spawns(monkeypatch)
+    pool = supervisor.WorkerPool()
+    kwargs = _pool_kwargs(tmp_path)
+    term, buffer = _terminal()
+    supervisor.sync_pool(pool, count=2, **kwargs)
+
+    # 실행: 실행기 2가 거듭 멈춘다
+    for _ in range(supervisor.MAX_RESTARTS):
+        latest = next(worker for worker in reversed(spawned) if worker.slot == 2)
+        latest.code = 1
+        supervisor.reap_workers(pool, term=term, **kwargs)
+
+    # 확인: 한도까지는 그 번호만 다시 띄우고, 넘으면 두고 알린다. 실행기 1은 그대로다.
+    assert [worker.slot for worker in spawned].count(2) == supervisor.MAX_RESTARTS
+    assert pool.states[2] is workers.SlotState.FAILED
+    assert 2 not in pool.spawned and 1 in pool.spawned
+    assert "다시 띄우지 않습니다" in buffer.getvalue()
+    supervisor.sync_pool(pool, count=2, **kwargs)
+    assert [worker.slot for worker in spawned].count(2) == supervisor.MAX_RESTARTS
+
+
+def test_stop_asks_all_workers_at_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # 준비
+    spawned = _fake_spawns(monkeypatch)
+    pool = supervisor.WorkerPool()
+    supervisor.sync_pool(pool, count=3, **_pool_kwargs(tmp_path))
+    for worker in spawned:
+        worker.wait = lambda timeout=None: 0  # type: ignore[attr-defined]
+    term, _buffer = _terminal()
+
+    # 실행
+    supervisor._stop({}, term, pool=pool)
+
+    # 확인
+    assert all(worker.asked_to_stop for worker in spawned)
+    assert pool.spawned == {}

@@ -41,7 +41,7 @@ const classification: DentModule = {
   // 뜻 분석이 끝나면 제안 탭 이름 옆 대기 수를 다시 읽게 알린다.
   onJobFinished: (job) => {
     if (job.kind === 'import') void loadDatasets()
-    if (job.kind === 'map') notifyAnalysisFinished()
+    if (job.kind === 'map') notifyAnalysisFinished(job)
   },
 }
 

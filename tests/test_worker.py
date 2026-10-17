@@ -1,6 +1,7 @@
-"""작업 실행기 테스트: 임베딩 연결 확인(DB에서 연결을 읽고, 모델을 등록하고, 차원이 바뀌어도 멈추지 않는다)과
-처음 실행할 때 한 번만 하는 내장 예시 넣기."""
+"""작업 실행기 테스트: 임베딩 연결 확인(DB에서 연결을 읽고, 모델을 등록하고, 차원이 바뀌어도 멈추지 않는다),
+처음 실행할 때 한 번만 하는 내장 예시 넣기, 번호 자리 잡기, 정리를 실행기 하나만 하기."""
 
+import pytest
 from sqlalchemy import delete, func, select
 
 from dent import worker
@@ -10,6 +11,8 @@ from dent.modules.retrieval import examples as retrieval_examples
 from dent.system import connections as connections_service
 from dent.system import datasets as datasets_service
 from dent.system import examples as examples_service
+from dent.system import jobs
+from dent.system.db import get_engine
 from dent.system.models import ConnectionRole, Dataset, EmbeddingModel, Flag
 
 # 모든 모듈의 내장 예시
@@ -141,3 +144,45 @@ async def test_install_first_run_examples_adds_only_module_added_later(db_sessio
     names = set(await db_session.scalars(select(Dataset.name)))
     assert started == len(generation_examples.EXAMPLES)
     assert names == {example.name for example in generation_examples.EXAMPLES}
+
+
+# ---------- 번호 · 한 번만 할 일 ----------
+
+
+async def test_take_slot_takes_given_slot_or_smallest_free_one(db_session):
+    # 준비
+    engine = get_engine()
+    async with engine.connect() as first, engine.connect() as second, engine.connect() as third:
+        # 실행
+        given = await worker._take_slot(first, 3)
+        taken_again = await worker._take_slot(second, 3)
+        free = await worker._take_slot(third, None)
+        for conn, slot in ((first, 3), (third, 1)):
+            await jobs.release_worker_lock(conn, slot=slot)
+
+    # 확인
+    assert (given, taken_again, free) == (3, None, 1)
+
+
+def test_main_rejects_slot_out_of_range():
+    # 실행 · 확인
+    with pytest.raises(SystemExit):
+        worker.main(["--slot", "9"])
+
+
+async def test_maintain_skips_cleanup_while_another_worker_holds_the_lock(db_session):
+    # 준비: 다른 실행기가 정리 잠금을 잡고 있다
+    engine = get_engine()
+    async with engine.connect() as other, engine.connect() as mine:
+        await jobs.try_acquire_maintenance_lock(other)
+
+        # 실행
+        await worker._maintain(mine)
+        skipped = await jobs.is_cleanup_due(db_session)
+        await jobs.release_maintenance_lock(other)
+        await worker._maintain(mine)
+        done = not await jobs.is_cleanup_due(db_session)
+
+    # 확인: 잡고 있는 동안은 건너뛰고, 풀린 뒤에는 이 실행기가 한다
+    assert skipped
+    assert done

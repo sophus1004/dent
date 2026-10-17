@@ -52,7 +52,8 @@ FOLLOW_TIMEOUT_S = 180.0
 # 실행되는지 · 종료되는지 보는 간격(초)
 POLL_INTERVAL_S = 0.5
 
-# 종료하라고 한 뒤 관리 프로세스가 끝나기를 기다리는 최대 시간(초). 작업 실행기의 정리 시간(30초)보다 넉넉히.
+# 종료하라고 한 뒤 관리 프로세스가 끝나기를 기다리는 최대 시간(초). 관리 프로세스가 API 서버 · 작업 실행기를
+# 함께 기다리는 시간(작업 실행기 40초) · 모델 서버 · DB 종료보다 넉넉히.
 STOP_WAIT_S = 90.0
 
 # 남아 있던 모델 서버를 종료한 뒤 포트가 빌 때까지 기다리는 최대 시간(초)
@@ -408,17 +409,44 @@ def status_command(settings: Settings, term: Terminal) -> int:
     if body is not None:
         worker = (
             str(body["info"]["worker"]["detail"])
-            .removeprefix("실행 중 · ")
+            .removeprefix("실행 중 ")
             .replace("대기 작업", "대기")
         )
         term.done("API 서버", "준비됨" if body.get("ready") else "준비 안 됨", rail=False)
         term.done("작업 실행기", worker, rail=False)
+        with httpx.Client(timeout=PROBE_TIMEOUT_S) as client:
+            pool = _get_json(client, f"{base_url}/api/v1/workers")
+        for slot in (pool or {}).get("slots", []):
+            term.done(f"  {slot['slot']}", _slot_status(slot), rail=False)
         for item in body.get("models", []):
             name, detail = _model_status(item)
             term.done(name, detail, rail=False)
         term.rail()
     term.end(f"{STOP_HINT} · 로그: uv run dent logs")
     return 0
+
+
+# 작업 실행기 번호의 상태 낱말 (/api/v1/workers의 state)
+SLOT_WORDS = {
+    "running": "실행 중",
+    "starting": "띄우는 중",
+    "draining": "끝나면 종료",
+    "restarting": "다시 띄우는 중",
+    "failed": "멈춤 · 다시 띄우지 않음",
+    "stopped": "실행 중 아님",
+}
+
+
+def _slot_status(slot: dict[str, Any]) -> str:
+    """작업 실행기 번호 한 줄의 값: '실행 중 · 작업 123 · 뉴스' · '끝나면 종료'."""
+    word = SLOT_WORDS.get(str(slot.get("state")), str(slot.get("state")))
+    job = slot.get("job")
+    if not job:
+        return word
+    parts = [word, f"작업 {job.get('id')}"]
+    if job.get("dataset_name"):
+        parts.append(str(job["dataset_name"]))
+    return " · ".join(parts)
 
 
 def _model_status(item: dict[str, Any]) -> tuple[str, str]:

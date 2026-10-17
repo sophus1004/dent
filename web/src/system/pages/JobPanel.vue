@@ -27,6 +27,7 @@ import { RouterLink } from 'vue-router'
 
 import { clockText, durationText, fmt } from '@/system/format'
 import { canRetry, currentPhase, eventsOf, phaseName, ROLE_NAMES } from '@/system/jobKinds'
+import { waitingReason } from '@/system/jobs'
 import type { ModuleJobKind } from '@/system/module'
 import JobStatusTag from '@/system/pages/JobStatusTag.vue'
 import { readiness } from '@/system/readiness'
@@ -207,6 +208,14 @@ async function copyRecord(): Promise<void> {
         <dd class="tabular-nums">{{ clockText(job.started_at ?? job.created_at) }} → {{ clockText(job.finished_at) || '—' }}</dd>
         <dt class="text-muted-foreground">걸린 시간</dt>
         <dd class="tabular-nums">{{ durationText(job.started_at, job.finished_at) || '—' }}</dd>
+        <template v-if="job.worker !== null">
+          <dt class="text-muted-foreground">작업 실행기</dt>
+          <dd class="tabular-nums">{{ job.worker }}</dd>
+        </template>
+        <template v-if="job.status === 'queued'">
+          <dt class="text-muted-foreground">대기</dt>
+          <dd>{{ waitingReason(job) ?? '—' }}</dd>
+        </template>
         <template v-if="job.attempts > 0">
           <dt class="text-muted-foreground">시작 횟수</dt>
           <dd>{{ job.attempts + 1 }} · 끊김 뒤 다시 꺼냄</dd>

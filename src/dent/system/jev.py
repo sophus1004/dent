@@ -9,18 +9,24 @@ model을 빼면 서버가 고른다(laya는 글자를 보고 english · multilin
 TypeSafe의 Jev는 나중에 Authorization: Bearer 키를 붙인다. 지금은 키 없이 부른다.
 """
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
+from dent.system import backoff
 from dent.system.connections import ConnectionCheck, describe_failure
 from dent.system.exceptions import ExternalServiceError
 from dent.system.models import Connection
 
 # 판정 하나의 시간 한도(초). 서버가 모델을 처음 불러오면 몇 초 걸릴 수 있다.
 DECIDE_TIMEOUT_S = 60.0
+
+# 서버가 바쁘다고(429 · 503 + Retry-After) 알릴 때 판정 하나가 기다리는 시간의 합의 상한(초).
+# 작업 여럿이 같은 Jev 서버에 함께 물으면 서버가 되밀 수 있다.
+DECIDE_BUSY_MAX_WAIT_S = 300.0
 
 # 연결 확인의 시간 한도(초). 화면이 기다리므로 판정보다 짧게 둔다.
 CHECK_TIMEOUT_S = 20.0
@@ -171,7 +177,15 @@ async def _post_systemone(
     chosen_model = model or connection.model
     if chosen_model:
         payload["model"] = chosen_model
-    response = await client.post(f"{connection.base_url}/v1/systemone", json=payload)
+    busy_waited = 0.0
+    while True:
+        response = await client.post(f"{connection.base_url}/v1/systemone", json=payload)
+        # 서버가 바쁘다고 알리면 말한 만큼 기다렸다 다시 묻는다(한도를 넘으면 그 상태로 실패).
+        delay = backoff.busy_delay(response)
+        if delay is None or busy_waited + delay > DECIDE_BUSY_MAX_WAIT_S:
+            break
+        busy_waited += delay
+        await asyncio.sleep(delay)
     response.raise_for_status()
     return _parse_decision(response.json())
 

@@ -22,6 +22,7 @@ import {
 } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 
+import { useDatasetJobs } from '@/system/datasetJobs'
 import { fmt } from '@/system/format'
 import { errorMessage } from '@/system/http'
 import { Button } from '@/system/ui/button'
@@ -29,7 +30,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { NativeSelect } from '@/system/ui/native-select'
 
 import { decideRepeat, decideRepeats, getRepeatSamples, listRepeats, scanRepeats } from '@/modules/retrieval/api'
-import { jobFinished, notifyDataChanged } from '@/modules/retrieval/jobEvents'
+import { notifyDataChanged } from '@/modules/retrieval/jobEvents'
 import type { RepeatDecision, RepeatKind, RepeatListRead, RepeatRead, RepeatSampleRead } from '@/modules/retrieval/types'
 
 const props = defineProps<{
@@ -57,7 +58,12 @@ const list = ref<RepeatListRead | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
 const busy = ref<string | null>(null)
-const scanning = ref(false)
+// 살피는 중: 이 데이터셋의 살피기 작업이 기다리거나 도는 동안(창을 닫았다 열어도, 다른 화면에서 돌아와도 보인다).
+// 작업을 넣는 요청을 보내는 동안도 살피는 중이다.
+const datasetJobs = useDatasetJobs(() => props.datasetId)
+const scanJob = computed(() => datasetJobs.activeOf('retrieval', 'scan'))
+const startingScan = ref(false)
+const scanning = computed(() => startingScan.value || scanJob.value !== null)
 const stateFilter = ref<StateFilter>('undecided')
 const kindFilter = ref<RepeatKind | 'all'>('all')
 const selectedId = ref<number | null>(null)
@@ -92,12 +98,14 @@ watch(
   },
   { immediate: true },
 )
-// 다시 살피기 작업이 끝나면(다른 작업이 끝나도) 목록을 다시 읽는다.
-watch(jobFinished, () => {
-  if (!open.value) return
-  scanning.value = false
-  void load({ pickFilter: false })
-})
+// 살피기 작업이 끝나면 목록을 다시 읽는다.
+watch(
+  () => scanJob.value?.id ?? null,
+  (id, previous) => {
+    const isScanFinished = previous !== null && previous !== undefined && id === null
+    if (isScanFinished && open.value) void load({ pickFilter: false })
+  },
+)
 watch(selectedId, loadSamples)
 // 거르기를 바꿔 누른 틀이 목록에서 빠지면 목록의 첫 틀을 보인다.
 watch([stateFilter, kindFilter], () => {
@@ -156,7 +164,7 @@ async function run(key: string, work: () => Promise<unknown>): Promise<void> {
   try {
     await work()
     await load({ pickFilter: false })
-    notifyDataChanged()
+    notifyDataChanged(props.datasetId)
     emit('changed')
   } catch (failure) {
     error.value = errorMessage(failure)
@@ -183,13 +191,15 @@ function followSuggestions(): Promise<void> {
 }
 
 async function scan(): Promise<void> {
-  scanning.value = true
+  startingScan.value = true
   error.value = null
   try {
     await scanRepeats(props.datasetId)
+    await datasetJobs.refresh()
   } catch (failure) {
-    scanning.value = false
     error.value = errorMessage(failure)
+  } finally {
+    startingScan.value = false
   }
 }
 

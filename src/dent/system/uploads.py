@@ -19,8 +19,9 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
-from sqlalchemy import exists, select
+from sqlalchemy import ColumnElement, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dent.system import tables
@@ -134,17 +135,27 @@ async def discard_upload(db: AsyncSession, *, upload_id: str) -> None:
     _discard(file)
 
 
+async def is_upload_importing(db: AsyncSession, *, upload_id: str) -> bool:
+    """이 올린 파일을 대기 · 실행 중인 가져오기가 쓰는지."""
+    return bool(await db.scalar(select(_is_in_use(upload_id))))
+
+
+def _is_in_use(upload_id: Any) -> ColumnElement[bool]:
+    """올린 파일을 대기 · 실행 중인 가져오기가 쓰는지의 조건. upload_id는 값이나 File.id 칸."""
+    return exists().where(
+        Import.source == ImportSource.FILE,
+        Import.status.in_(IN_USE_IMPORT_STATUSES),
+        Import.options["upload_id"].astext == upload_id,
+    )
+
+
 async def discard_unused_uploads(db: AsyncSession) -> int:
     """가져오지 않은 채 UNUSED_UPLOAD_RETENTION이 지난 올린 파일을 지운다. 지운 수를 돌려준다.
 
     대기·실행 중인 가져오기가 쓰는 파일은 남긴다. 커밋은 부른 쪽이 한다.
     """
     cutoff = datetime.now(UTC) - UNUSED_UPLOAD_RETENTION
-    is_in_use = exists().where(
-        Import.source == ImportSource.FILE,
-        Import.status.in_(IN_USE_IMPORT_STATUSES),
-        Import.options["upload_id"].astext == File.id,
-    )
+    is_in_use = _is_in_use(File.id)
     query = select(File).where(File.deleted_at.is_(None), File.created_at < cutoff, ~is_in_use)
     files = list((await db.scalars(query)).all())
     for file in files:

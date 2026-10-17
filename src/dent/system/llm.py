@@ -11,6 +11,7 @@
 API 키는 헤더에만 싣는다. 확인 결과 · 로그 · 오류 문장에는 남기지 않는다(화면에는 api_key_hint만).
 """
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from typing import Any, Literal
 
 import httpx
 
+from dent.system import backoff
 from dent.system.connections import ConnectionCheck, describe_failure
 from dent.system.exceptions import ExternalServiceError
 from dent.system.models import Connection, LlmProvider
@@ -27,6 +29,10 @@ CHECK_TIMEOUT_S = 15.0
 
 # 글 만들기의 시간 한도(초). 긴 답은 수십 초 걸릴 수 있다.
 COMPLETE_TIMEOUT_S = 120.0
+
+# 공급자가 요청 한도로 되밀 때(429 · 503 + Retry-After) 답 하나가 기다리는 시간의 합의 상한(초).
+# 작업 여럿이 같은 LLM에 함께 물으면 공급자의 분당 요청 한도에 걸릴 수 있다. 크레딧 없음은 기다리지 않는다.
+COMPLETE_BUSY_MAX_WAIT_S = 180.0
 
 # 서버에 붙을 때 기다리는 시간(초). 주소가 틀렸을 때 오래 멈춰 있지 않게 짧게 둔다.
 CONNECT_TIMEOUT_S = 5.0
@@ -205,15 +211,29 @@ async def chat(
         )
     provider = provider_of(connection)
     timeout = httpx.Timeout(COMPLETE_TIMEOUT_S, connect=CONNECT_TIMEOUT_S)
+    busy_waited = 0.0
     try:
         async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
-            if provider is LlmProvider.ANTHROPIC:
-                return await _chat_anthropic(
-                    client, connection, messages=messages, tools=tools, max_tokens=max_tokens
-                )
-            return await _chat_openai(
-                client, connection, messages=messages, tools=tools, max_tokens=max_tokens
-            )
+            while True:
+                try:
+                    if provider is LlmProvider.ANTHROPIC:
+                        return await _chat_anthropic(
+                            client,
+                            connection,
+                            messages=messages,
+                            tools=tools,
+                            max_tokens=max_tokens,
+                        )
+                    return await _chat_openai(
+                        client, connection, messages=messages, tools=tools, max_tokens=max_tokens
+                    )
+                except httpx.HTTPStatusError as error:
+                    # 요청 한도로 되밀면 공급자가 말한 만큼 기다렸다 다시 묻는다.
+                    delay = _busy_delay(error)
+                    if delay is None or busy_waited + delay > COMPLETE_BUSY_MAX_WAIT_S:
+                        raise
+                    busy_waited += delay
+                    await asyncio.sleep(delay)
     except httpx.HTTPStatusError as error:
         raise ExternalServiceError(f"LLM 답을 받지 못했습니다 ({_status_reason(error)}).") from None
     except (httpx.HTTPError, KeyError, TypeError, ValueError, IndexError) as error:
@@ -382,6 +402,13 @@ def _read_arguments(raw: Any) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _busy_delay(error: httpx.HTTPStatusError) -> float | None:
+    """요청 한도로 되밀었으면 기다릴 시간(초). 크레딧 없음이거나 Retry-After가 없으면 None."""
+    if _error_code(error.response) in QUOTA_ERROR_CODES:
+        return None
+    return backoff.busy_delay(error.response)
 
 
 def _status_reason(error: httpx.HTTPStatusError) -> str:

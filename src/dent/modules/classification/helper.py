@@ -269,7 +269,7 @@ async def undo_helper(
 async def _refresh_analysis_if_needed(db: AsyncSession, *, dataset_id: int) -> None:
     """뜻 분석이 없거나 오래됐으면 다시 만들게 한다(임베딩이 연결돼 있고 만드는 중이 아닐 때만).
 
-    작업 실행기는 작업을 넣은 순서대로 하나씩 처리하므로, 도우미 작업은 뜻 분석이 끝난 뒤에 돈다.
+    작업 실행기는 같은 데이터셋의 작업을 넣은 순서대로 하나씩 처리하므로, 도우미 작업은 뜻 분석이 끝난 뒤에 돈다.
     """
     if await connections.get_connection(db, role=ConnectionRole.EMBEDDING) is None:
         return

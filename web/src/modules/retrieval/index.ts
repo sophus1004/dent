@@ -59,12 +59,14 @@ const retrieval: DentModule = {
       },
     },
     export: { name: '내보내기', phases: { teacher: '교사 점수', writing: '쓰기' } },
+    // 학습할 모델을 바꾸면 그 토크나이저로 문서 · 청크의 토큰을 다시 잰다.
+    length: { name: '길이 재기' },
   },
   // 가져오기가 끝나면 새 데이터셋 · 수가 사이드바와 홈에 보이게 목록을 다시 읽는다.
   // 그 밖의 작업이 끝나면 데이터셋 화면(진단 · 제안 대기 수 · 데이터)이 다시 읽게 알린다.
   onJobFinished: (job) => {
     if (job.kind === 'import') void loadDatasets()
-    notifyJobFinished()
+    notifyJobFinished(job)
   },
 }
 

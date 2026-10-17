@@ -1,13 +1,16 @@
-"""작업 실행기 프로세스를 실행한다: python -m dent.worker
+"""작업 실행기 프로세스를 실행한다: python -m dent.worker [--slot 번호]
 
-설정 · 로그 · storage · DB · pgvector · 테이블 버전을 확인한 뒤 자리 잡기(하나만 뜨게) · 임베딩 서버 확인 ·
-끊긴 작업 되살리기 · 정리 · 처음이면 내장 예시 넣기를 하고, 종료할 때까지 대기열에서 작업을 꺼내 처리한다.
-평소에는 런처(uv run dent)가 이것을 띄운다.
+설정 · 로그 · storage · DB · pgvector · 테이블 버전을 확인한 뒤 번호 자리 잡기(번호마다 하나만 뜨게) · 끊긴 작업 되살리기 ·
+임베딩 서버 확인 · (실행기 가운데 하나만) 정리 · 처음이면 내장 예시 넣기를 하고, 종료할 때까지 대기열에서 작업을 하나씩
+꺼내 처리한다. 실행기 여럿이 함께 돌며, 같은 데이터셋의 작업은 넣은 순서대로 하나씩 돈다(jobs.claim_next_job).
+평소에는 관리 프로세스(uv run dent)가 번호를 주어 띄운다. 번호 없이 손으로 띄우면 빈 번호를 잡는다.
+종료하라는 신호를 받으면 새 작업을 꺼내지 않고, 하던 작업을 끝낸 뒤 종료한다.
 
 임베딩 연결은 system_connections에서 몇 초마다 다시 읽는다. 화면에서 연결을 저장하면
 다시 실행하지 않아도 곧 새 연결로 확인하고, 처음 보는 모델이면 등록한다.
 """
 
+import argparse
 import asyncio
 import contextlib
 import logging
@@ -44,6 +47,10 @@ LABEL = "작업 실행기"
 
 # 대기열이 비었을 때 다시 볼 때까지 쉬는 시간(초)
 POLL_INTERVAL_S = 1.0
+
+# 다른 실행기가 죽어 남긴 작업을 되살리고 정리할 때가 됐는지 보는 간격(초). 죽은 번호를 관리 프로세스가
+# 다시 띄우지 않을 때(너무 자주 멈춤) 남은 작업을 살아 있는 실행기가 이어 받게.
+MAINTENANCE_INTERVAL_S = 60.0
 
 # 임베딩 연결(system_connections)을 다시 읽는 간격(초). 화면에서 바꾼 연결을 이만큼 안에 알아챈다.
 CONNECTION_POLL_INTERVAL_S = 5.0
@@ -118,51 +125,80 @@ def _listen_for_stop(loop: asyncio.AbstractEventLoop, stop: asyncio.Event) -> No
         signal.signal(getattr(signal, name), on_signal)
 
 
-async def run() -> int:
-    """작업 실행기를 실행하고, 종료할 때까지 작업을 처리한다. 실행할 때 확인에서 멈추면 1을 돌려준다."""
+async def run(slot: int | None = None) -> int:
+    """작업 실행기를 실행하고, 종료할 때까지 작업을 처리한다. 실행할 때 확인에서 멈추면 1을 돌려준다.
+
+    slot은 관리 프로세스가 준 번호다. 그 번호를 다른 실행기가 잡고 있으면 띄우지 않고 0으로 끝낸다.
+    """
     stop = asyncio.Event()
     _listen_for_stop(asyncio.get_running_loop(), stop)
+    label = _label(slot)
 
     try:
         settings = get_settings()
-        setup_logging(settings, process="worker", label=LABEL)
+        setup_logging(settings, process=_log_name(slot), label=label)
         logger.info(settings.describe())
         check_storage(settings)
         engine = init_engine(statement_timeout_ms=None)
         await check_database(engine, settings)
     except StartupError as error:
-        report_startup_error(error, label=LABEL)
+        report_startup_error(error, label=label)
         await dispose_engine()
         return 1
 
     lock_conn = await engine.connect()
-    has_lock = False
+    held: int | None = None
     try:
-        has_lock = await jobs.try_acquire_worker_lock(lock_conn)
+        held = await _take_slot(lock_conn, slot)
         # 잠금은 연결에 붙어 있으므로 트랜잭션을 닫아도 남는다. 열린 트랜잭션을 오래 두지 않게 닫는다.
         await lock_conn.commit()
-        if not has_lock:
-            logger.info("작업 실행기가 이미 실행 중입니다. 새로 띄우지 않고 끝냅니다.")
+        if held is None:
+            logger.info(
+                "%s · 다른 실행기가 이 번호를 쓰고 있습니다. 새로 띄우지 않고 끝냅니다.", label
+            )
             return 0
+        label = _label(held)
 
+        await _recover(restarted_slot=held)
         embedding_state = await _check_embedding(quiet=False)
-        await _recover_and_clean()
-        await _install_first_run_examples()
+        await _maintain(lock_conn, first_run=True)
         async with get_sessionmaker()() as session:
             queued = await jobs.count_queued(session)
         logger.info(
-            "준비됐습니다. 대기 작업 %d건 · 임베딩: %s", queued, embedding_state.check.detail
+            "%s · 준비됐습니다. 대기 작업 %d건 · 임베딩: %s",
+            label,
+            queued,
+            embedding_state.check.detail,
         )
-        await _work(stop, embedding_state)
+        await _work(stop, embedding_state, slot=held, lock_conn=lock_conn)
     except StartupError as error:
-        report_startup_error(error, label=LABEL)
+        report_startup_error(error, label=label)
         return 1
     finally:
-        await _close_lock(lock_conn, has_lock=has_lock)
+        await _close_lock(lock_conn, slot=held)
         await dispose_engine()
 
-    logger.info("작업 실행기를 종료했습니다.")
+    logger.info("%s · 종료했습니다.", label)
     return 0
+
+
+def _label(slot: int | None) -> str:
+    """로그 · 터미널에 보이는 이름: '작업 실행기 2'. 번호를 모르면 '작업 실행기'."""
+    return LABEL if slot is None else f"{LABEL} {slot}"
+
+
+def _log_name(slot: int | None) -> str:
+    """로그 파일 이름(storage/logs/<이름>.log). 실행기마다 따로 써서, 날마다 돌릴 때 서로 엉키지 않게."""
+    return "worker" if slot is None else f"worker-{slot}"
+
+
+async def _take_slot(lock_conn: AsyncConnection, slot: int | None) -> int | None:
+    """번호 자리를 잡는다. 번호를 주면 그 번호만, 안 주면 빈 번호를 작은 것부터. 잡은 번호, 못 잡으면 None."""
+    if slot is None:
+        return await jobs.acquire_free_worker_slot(lock_conn)
+    if await jobs.try_acquire_worker_lock(lock_conn, slot=slot):
+        return slot
+    return None
 
 
 async def _check_embedding(
@@ -218,18 +254,44 @@ async def _refresh_embedding(
     return await _check_embedding(quiet=not is_changed, transport=transport)
 
 
-async def _recover_and_clean() -> None:
-    """지난번에 끊긴 작업을 되살리고, 하루가 지났으면 정리 작업을 돈다."""
+async def _recover(*, restarted_slot: int | None = None) -> None:
+    """죽은 실행기가 남긴 작업을 되살린다. 너무 여러 번 끊긴 작업은 모듈에 넘겨 뒷정리한다.
+
+    restarted_slot: 막 자리를 잡은 번호. 같은 번호로 돌다 죽은 실행기의 작업도 되살린다.
+    """
     async with get_sessionmaker()() as session:
-        recovered = await jobs.recover_interrupted_jobs(session)
+        recovered = await jobs.recover_interrupted_jobs(session, restarted_slot=restarted_slot)
     if recovered.requeued or recovered.failed:
         logger.info(
-            "지난번에 끊긴 작업을 되살렸습니다: 다시 대기 %d건, 실패 처리 %d건.",
+            "끊긴 작업을 되살렸습니다: 다시 대기 %d건, 실패 처리 %d건.",
             recovered.requeued,
             len(recovered.failed),
         )
     for job in recovered.failed:
         await _clean_up_failed(job)
+
+
+async def _maintain(lock_conn: AsyncConnection, *, first_run: bool = False) -> None:
+    """한 번만 할 일: 하루가 지났으면 정리 작업, 실행할 때(first_run)는 처음이면 내장 예시 넣기.
+
+    실행기 가운데 정리 잠금을 잡은 하나만 한다. 다른 실행기가 하고 있으면 건너뛴다.
+    """
+    if not await jobs.try_acquire_maintenance_lock(lock_conn):
+        await lock_conn.commit()
+        return
+    await lock_conn.commit()
+    try:
+        await _clean_if_due()
+        if first_run:
+            await _install_first_run_examples()
+    finally:
+        with contextlib.suppress(Exception):  # 잠금 연결이 끊겼으면 잠금도 이미 풀렸다.
+            await jobs.release_maintenance_lock(lock_conn)
+            await lock_conn.commit()
+
+
+async def _clean_if_due() -> None:
+    """하루가 지났으면 정리 작업을 돈다. 실패해도 실행을 막지 않는다(다음에 다시 한다)."""
     try:
         async with get_sessionmaker()() as session:
             if await jobs.is_cleanup_due(session):
@@ -287,17 +349,32 @@ async def _clean_up_failed(job: Job) -> None:
         logger.exception("작업 %d (%s.%s)을 뒷정리하지 못했습니다.", job.id, job.module, job.kind)
 
 
-async def _work(stop: asyncio.Event, embedding_state: EmbeddingState) -> None:
-    """종료할 때까지 대기열에서 작업을 하나씩 꺼내 처리한다. 사이사이 임베딩 연결이 바뀌었는지 본다."""
+async def _work(
+    stop: asyncio.Event,
+    embedding_state: EmbeddingState,
+    *,
+    slot: int,
+    lock_conn: AsyncConnection,
+) -> None:
+    """종료할 때까지 대기열에서 작업을 하나씩 꺼내 처리한다. 사이사이 임베딩 연결 · 되살릴 작업 · 정리를 본다.
+
+    종료하라는 신호는 작업과 작업 사이에 본다(하던 작업은 끝까지 한다).
+    """
     last_connection_poll = time.monotonic()
+    last_maintenance = time.monotonic()
     while not stop.is_set():
         is_poll_due = time.monotonic() - last_connection_poll >= CONNECTION_POLL_INTERVAL_S
         if is_poll_due:
             embedding_state = await _refresh_embedding(embedding_state)
             last_connection_poll = time.monotonic()
+        is_maintenance_due = time.monotonic() - last_maintenance >= MAINTENANCE_INTERVAL_S
+        if is_maintenance_due:
+            await _recover()
+            await _maintain(lock_conn)
+            last_maintenance = time.monotonic()
 
         async with get_sessionmaker()() as session:
-            job = await jobs.claim_next_job(session)
+            job = await jobs.claim_next_job(session, worker=slot)
         if job is None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=POLL_INTERVAL_S)
@@ -326,18 +403,27 @@ async def _handle(job: Job) -> None:
             )
 
 
-async def _close_lock(lock_conn: AsyncConnection, *, has_lock: bool) -> None:
+async def _close_lock(lock_conn: AsyncConnection, *, slot: int | None) -> None:
     """작업 실행기 자리를 내놓고 잠금 연결을 닫는다."""
     with contextlib.suppress(Exception):  # 종료할 때 DB가 먼저 사라졌어도 조용히 끝낸다.
-        if has_lock:
-            await jobs.release_worker_lock(lock_conn)
+        if slot is not None:
+            await jobs.release_worker_lock(lock_conn, slot=slot)
             await lock_conn.commit()
         await lock_conn.close()
 
 
-def main() -> int:
-    """작업 실행기를 실행한다."""
-    return asyncio.run(run())
+def main(argv: list[str] | None = None) -> int:
+    """작업 실행기를 실행한다. --slot으로 번호를 받는다(관리 프로세스가 준다)."""
+    parser = argparse.ArgumentParser(prog="python -m dent.worker", description="DENT 작업 실행기")
+    parser.add_argument(
+        "--slot",
+        type=int,
+        choices=range(1, jobs.MAX_WORKERS + 1),
+        metavar=f"1~{jobs.MAX_WORKERS}",
+        help="작업 실행기 번호. 주지 않으면 빈 번호를 잡는다.",
+    )
+    args = parser.parse_args(argv)
+    return asyncio.run(run(args.slot))
 
 
 if __name__ == "__main__":

@@ -136,3 +136,11 @@ def test_texts_for_sizes_and_times():
     assert terminal.elapsed_text(72) == "1분 12초"
     assert terminal.minutes_text(130) == "약 2분"
     assert terminal.minutes_text(30) == "1분 안"
+
+
+def test_short_label_keeps_worker_number():
+    # 실행 · 확인
+    assert terminal.short_label("작업 실행기") == "작업"
+    assert terminal.short_label("작업 실행기 3") == "작업 3"
+    assert terminal.short_label("임베딩 모델") == "임베딩"
+    assert terminal.short_label("API") == "API"

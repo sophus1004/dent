@@ -95,6 +95,7 @@ async def test_discard_expired_exports_removes_old_files_only(db_session):
     exports.file_path(old).write_text("old", encoding="utf-8")
     exports.file_path(fresh).write_text("fresh", encoding="utf-8")
     old.created_at = datetime.now(UTC) - exports.EXPORT_RETENTION - timedelta(hours=1)
+    old.status = ExportStatus.DONE
     await db_session.commit()
 
     # 실행
@@ -106,3 +107,20 @@ async def test_discard_expired_exports_removes_old_files_only(db_session):
     assert not exports.file_path(old).exists()
     assert exports.file_path(fresh).exists()
     assert (await exports.get_export(db_session, export_id=old.id)).deleted_at is not None
+
+
+async def test_discard_expired_exports_skips_export_still_being_made(db_session):
+    # 준비: 오래 기다리다 이제 만드는 중인 내보내기(다른 작업 실행기가 파일을 쓰는 중)
+    making = await _make_export(db_session, file_name="making.jsonl")
+    exports.file_path(making).write_text("half", encoding="utf-8")
+    making.created_at = datetime.now(UTC) - exports.EXPORT_RETENTION - timedelta(hours=1)
+    making.status = ExportStatus.RUNNING
+    await db_session.commit()
+
+    # 실행
+    removed = await exports.discard_expired_exports(db_session)
+    await db_session.commit()
+
+    # 확인
+    assert removed == 0
+    assert exports.file_path(making).exists()

@@ -7,6 +7,7 @@
 from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dent.system import jobs
 from dent.system.db import flush_or_conflict
 from dent.system.exceptions import ConflictError, NotFoundError
 from dent.system.models import IMPORTING_STATUSES, Dataset, Import
@@ -82,6 +83,9 @@ async def delete_dataset(db: AsyncSession, *, dataset_id: int, module: str) -> N
     )
     if is_importing:
         raise ConflictError(DATASET_IMPORTING_MESSAGE)
+    # 기다리던 작업은 멈춘다(데이터셋 번호가 비면 데이터셋마다 차례에서 빠져 엉뚱하게 돌 수 있다).
+    # 도는 작업에는 멈추라고 적는다. 처리 함수가 데이터셋이 없음을 보고 끝낸다.
+    await jobs.cancel_dataset_jobs(db, dataset_id=dataset_id)
     await db.execute(delete(Dataset).where(Dataset.id == dataset_id))
 
 

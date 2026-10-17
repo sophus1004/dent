@@ -15,6 +15,7 @@ import {
 } from '@lucide/vue'
 
 import { LLM_PROVIDERS } from '@/system/connections/connections'
+import { openWorkerSettings } from '@/system/workers/workers'
 import type { CheckRead, ModelInfoRead, ReadinessRead } from '@/system/readiness'
 
 // good: 됨 · bad: 준비 조건(DB·스키마·저장 공간)이 안 되거나 저장한 연결이 실패 · off: 종료됨이나 미연결(참고 항목)
@@ -34,6 +35,15 @@ export interface SystemRow {
   tag: string | null
   // 서버가 준 원래 설명. 준비 조건이 안 될 때 상태 화면에서만 보인다.
   detail: string
+  // 줄 끝의 작은 버튼(예: 작업 실행기 [설정]). 없으면 null
+  action: SystemRowAction | null
+}
+
+// 시스템 줄 끝의 작은 버튼
+export interface SystemRowAction {
+  // 짧은 버튼 이름. 예: '설정'
+  label: string
+  run: () => void
 }
 
 // 모델 줄의 상태: good 실행 중 · 연결됨, run 내려받는 중 · 확인하는 중 · 불러오는 중, bad 실패, off 미연결
@@ -94,9 +104,10 @@ export function systemRows(readiness: ReadinessRead): SystemRow[] {
       name: '작업 실행기',
       tone: worker.ok ? 'good' : 'off',
       word: worker.ok ? '실행 중' : '종료됨',
-      value: queuedJobs(worker.detail),
+      value: workerValue(worker.detail),
       tag: null,
       detail: worker.detail,
+      action: { label: '설정', run: openWorkerSettings },
     },
   ]
 }
@@ -196,7 +207,7 @@ function requiredRow(
   const tone = check.ok ? 'good' : 'bad'
   const word = check.ok ? okWord : '오류'
   const value = check.ok ? okValue : ''
-  return { key, icon, name, tone, word, value, tag: check.ok ? tag : null, detail: check.detail }
+  return { key, icon, name, tone, word, value, tag: check.ok ? tag : null, detail: check.detail, action: null }
 }
 
 // 'localhost:5432/dent · PostgreSQL 16.4 · vector 0.8.0' → 'PostgreSQL 16.4 · vector 0.8.0'
@@ -218,8 +229,11 @@ function storageValue(detail: string): string {
   return joined([free ? `여유 ${free} GB` : null, models ? `모델 ${models} GB` : null])
 }
 
-// '실행 중 · 대기 작업 0건' → '대기 0건'
-function queuedJobs(detail: string): string {
-  const count = detail.match(/대기 작업 (\d+)건/)?.[1]
-  return count ? `대기 ${count}건` : ''
+// '실행 중 4 / 4 · 도는 중 1 · 대기 작업 3건' → '4 / 4 · 도는 중 1 · 대기 3건'
+// '실행 중이 아닙니다. … (대기 작업 3건).' → '대기 3건'
+function workerValue(detail: string): string {
+  const running = detail.match(/실행 중 (\d+ \/ \d+)/)?.[1]
+  const busy = detail.match(/도는 중 (\d+)/)?.[1]
+  const queued = detail.match(/대기 작업 (\d+)건/)?.[1]
+  return joined([running ?? null, busy ? `도는 중 ${busy}` : null, queued ? `대기 ${queued}건` : null])
 }

@@ -15,15 +15,22 @@ const SEEN_KEY = 'dent-jobs-seen-at'
 // 확인한 적이 없으면 이만큼 앞부터의 실패를 센다(밀리초, 24시간)
 const FIRST_SEEN_WINDOW_MS = 24 * 60 * 60 * 1000
 
-// 한 번에 알릴 수 있는 끝난 작업 수
+// 한 번에 읽는 끝난 작업 수와, 한 번 물을 때 넘겨 읽는 최대 쪽 수
 const ANNOUNCE_LIMIT = 50
+const MAX_PAGES = 10
+
+// 이미 본 끝난 시각보다 이만큼 앞부터 다시 묻는다(밀리초). 작업 실행기 여럿이 함께 돌면, 먼저 끝난 시각을 적은 작업이
+// 뒤에 커밋되어 늦게 보일 수 있다(끝난 시각은 처리 함수가 적고 커밋은 그 뒤에 한다). 본 작업은 번호로 거른다.
+const LOOKBACK_MS = 30_000
 
 // 확인 안 한 실패 수
 export const unseenFailures = ref(0)
 
 let timer: ReturnType<typeof setInterval> | undefined
-// 이 시각 뒤에 끝난 작업만 알린다. 처음은 앱을 켠 때, 그 뒤로는 받은 작업의 가장 늦은 끝난 시각
-let checkedUntil = new Date().toISOString()
+// 앱을 켠 때. 이보다 먼저 끝난 작업은 알리지 않는다.
+const startedAt = Date.now()
+// 받은 작업의 가장 늦은 끝난 시각(밀리초). 다음에는 이보다 LOOKBACK_MS 앞부터 묻는다.
+let checkedUntil = startedAt
 const announced = new Set<number>()
 
 /** 살피기를 시작한다. 앱이 켜질 때 한 번 부른다. */
@@ -55,15 +62,19 @@ function seenAt(): string {
 
 async function poll(announce: (job: JobRead) => void): Promise<void> {
   try {
-    const finished = await listJobs({ finished_after: checkedUntil, limit: ANNOUNCE_LIMIT })
-    // 최근 것부터 오므로 뒤집어 끝난 순서대로 알린다.
-    for (const job of [...finished.items].reverse()) {
-      if (announced.has(job.id)) continue
-      announced.add(job.id)
-      announce(job)
-      // 서버 시각(마이크로초)과 브라우저 시각(밀리초)은 글자 길이가 달라 날짜 값으로 견준다.
-      const isLater = job.finished_at !== null && Date.parse(job.finished_at) > Date.parse(checkedUntil)
-      if (isLater && job.finished_at) checkedUntil = job.finished_at
+    const since = new Date(Math.max(startedAt, checkedUntil - LOOKBACK_MS)).toISOString()
+    // finished_after를 주면 끝난 순서(먼저 끝난 것부터)로 온다. 한 쪽이 가득 차면 다음 쪽까지 넘겨 읽는다.
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const finished = await listJobs({ finished_after: since, limit: ANNOUNCE_LIMIT, offset: page * ANNOUNCE_LIMIT })
+      for (const job of finished.items) {
+        // 서버 시각(마이크로초)과 브라우저 시각(밀리초)은 글자 길이가 달라 날짜 값으로 견준다.
+        const finishedAt = job.finished_at ? Date.parse(job.finished_at) : NaN
+        if (!Number.isNaN(finishedAt)) checkedUntil = Math.max(checkedUntil, finishedAt)
+        if (announced.has(job.id)) continue
+        announced.add(job.id)
+        announce(job)
+      }
+      if (finished.items.length < ANNOUNCE_LIMIT) break
     }
     const failures = await listJobs({ status: ['failed'], finished_after: seenAt(), limit: 1 })
     unseenFailures.value = failures.total

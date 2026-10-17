@@ -59,13 +59,16 @@ async def update_settings(
 
 
 async def queue_length(db: AsyncSession, *, dataset_id: int) -> None:
-    """길이를 다시 재는 작업을 넣는다. 커밋은 부른 쪽이 한다."""
+    """길이를 다시 재는 작업을 넣는다(이미 기다리는 것이 있으면 그것을 쓴다). 커밋은 부른 쪽이 한다."""
     await jobs.enqueue_job(
         db,
         module=generation_service.MODULE_NAME,
         kind=lengths.LENGTH_JOB_KIND,
         params={"dataset_id": dataset_id},
         dataset_id=dataset_id,
+        dedupe_key=jobs.dedupe_key_of(
+            generation_service.MODULE_NAME, lengths.LENGTH_JOB_KIND, dataset_id
+        ),
     )
 
 

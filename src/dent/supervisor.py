@@ -2,8 +2,13 @@
 
 런처(uv run dent)가 묻기 · 패키지 설치를 마친 뒤 이 프로세스를 터미널과 떨어뜨려 띄운다(창을 닫아도 계속 돈다).
 uv run dent --foreground면 런처가 같은 일을 자기 안에서 한다(run 함수, 터미널에 바로 보인다).
-- 순서: 내장 DB 실행 · 테이블 올리기 → 모델 서버 → API 서버 · 작업 실행기 → 준비됨 → 지켜보기 → 종료.
-  내장 DB를 여기서 실행하는 까닭: 런처의 터미널 창을 닫아도(Windows는 창에 붙은 프로세스가 같이 종료된다) DB가 남게.
+- 순서: 내장 DB 실행 · 테이블 올리기 → 모델 서버 → API 서버 → 작업 실행기(정한 수만큼, 번호 1부터) → 준비됨 →
+  지켜보기 → 종료. 내장 DB를 여기서 실행하는 까닭: 런처의 터미널 창을 닫아도(Windows는 창에 붙은 프로세스가
+  같이 종료된다) DB가 남게.
+- 작업 실행기: 실행기 수는 화면에서 바꾸고 DB에 둔다(system.workers). 몇 초마다 API로 읽어 늘리거나(빈 번호를 띄움)
+  줄인다(큰 번호부터 종료하라고 알림: 하던 작업을 끝내면 종료, 강제 종료 시간 없음). 실행기 하나가 멈추면 그 번호만
+  다시 띄우고(5분에 3번까지, 넘으면 알리고 그 번호는 둔다), 번호마다 상태를 storage/run/workers.json에 적는다.
+  API 서버가 멈추면 나머지도 종료한다.
 - 기록(storage/run/dent.json): 관리 프로세스 번호 · 만든 시각 · 포트 · 단계(starting · ready · failed) · 단계 줄 · 실패 까닭.
   런처의 실행 화면 · uv run dent status · stop이 읽는다. 깔끔히 종료하면 지우고, 실패하면 까닭과 함께 남긴다.
 - 종료: storage/run/stop 파일이 생기면(uv run dent stop) 차례로 종료한다. 신호(SIGINT · SIGTERM · SIGHUP, Windows는 Ctrl+Break)도 같다.
@@ -40,7 +45,7 @@ from rich.console import Console, Group, RenderableType
 from rich.live import Live
 from rich.text import Text
 
-from dent.system import devices, embedded_db, embedded_models
+from dent.system import devices, embedded_db, embedded_models, workers
 from dent.system.checks import ALEMBIC_INI
 from dent.system.config import DEFAULT_PORT, LOOPBACK_HOST, PROJECT_ROOT, Settings, get_settings
 from dent.system.devices import Device
@@ -63,11 +68,13 @@ from dent.system.terminal import (
     elapsed_text,
     minutes_text,
 )
+from dent.system.workers import SlotState
 
-# 띄울 프로세스 이름과 모듈
+# 띄울 프로세스 이름과 모듈. 작업 실행기는 번호마다 하나씩 띄운다('작업 실행기 2').
 API = "API"
 WORKER = "작업 실행기"
-PROCESSES = {API: "dent.server", WORKER: "dent.worker"}
+PROCESSES = {API: "dent.server"}
+WORKER_MODULE = "dent.worker"
 
 # 이 파일을 모듈로 띄우는 이름 (런처가 뒤에 띄운다)
 SUPERVISOR_MODULE = "dent.supervisor"
@@ -97,8 +104,18 @@ PROBE_TIMEOUT_S = 2.0
 WATCH_INTERVAL_S = 0.5
 MODEL_POLL_INTERVAL_S = 2.0
 
-# 종료하라고 한 뒤 기다리는 최대 시간(초). 각 프로세스의 정리 시간(API 10초, 작업 실행기 30초)보다 길게.
+# 종료하라고 한 뒤 기다리는 최대 시간(초). API는 정리 시간(10초)보다 길게. 작업 실행기는 하던 작업을 끝내고
+# 종료하는데, DENT를 종료할 때는 이만큼만 기다리고 강제로 종료한다(하던 작업은 다음에 실행할 때 이어서 한다).
+# 모두에게 한꺼번에 알리고 함께 기다린다.
 STOP_TIMEOUT_S = {API: 15.0, WORKER: 40.0}
+
+# 실행기 수를 다시 읽는 간격(초). 화면에서 바꾸면 이만큼 안에 늘리거나 줄인다.
+POOL_POLL_INTERVAL_S = 2.0
+
+# 멈춘 작업 실행기를 다시 띄우는 한도: RESTART_WINDOW_S초 안에 MAX_RESTARTS번 멈추면 그 번호는 두고 알린다
+# (실행할 때 확인에서 늘 멈추는 실행기를 끝없이 다시 띄우지 않게).
+RESTART_WINDOW_S = 300.0
+MAX_RESTARTS = 3
 
 # 내장 모델 서버 프로세스의 모듈, 로그 이름(자식의 줄 앞 이름), 로그 파일 이름
 MODEL_SERVER_MODULE = "dent.model_server"
@@ -180,6 +197,29 @@ class ModelServers:
 
     # 실행한 시각 (준비까지 걸린 시간을 알리려고)
     started_at: float = field(default_factory=time.monotonic)
+
+
+@dataclass
+class WorkerPool:
+    """작업 실행기 번호마다 프로세스 · 상태. 관리 프로세스만 늘리고 줄인다."""
+
+    # 정한 실행기 수 (API에서 읽는다)
+    count: int = workers.DEFAULT_WORKERS
+
+    # 번호 → 프로세스 (끝나면 빠진다)
+    spawned: dict[int, subprocess.Popen[str]] = field(default_factory=dict)
+
+    # 번호 → 관리 프로세스가 보는 상태 (띄우는 중 · 끝나면 종료 · 다시 띄우는 중 · 멈춤 · 실행 중 아님)
+    states: dict[int, SlotState] = field(default_factory=dict)
+
+    # 번호 → 최근에 멈춘 시각들 (다시 띄우는 한도를 잰다)
+    crashes: dict[int, deque[float]] = field(default_factory=dict)
+
+    # 다른 실행기가 이미 잡고 있던 번호 (띄우자 0으로 끝났다). 이번 실행에서는 다시 띄우지 않는다.
+    taken: set[int] = field(default_factory=set)
+
+    # 실행기를 처음 띄웠는지 (API가 준비된 뒤 정한 수를 읽고 띄운다)
+    started: bool = False
 
 
 class ChildOutput:
@@ -405,9 +445,10 @@ def run(
     finish_detail: str,
     on_ready: Callable[[], None] | None = None,
 ) -> int:
-    """DB → 모델 서버 → API 서버 · 작업 실행기를 띄우고, 종료하라고 할 때까지 지켜본 뒤 차례로 종료한다. 끝난 코드.
+    """DB → 모델 서버 → API 서버 → 작업 실행기를 띄우고, 종료하라고 할 때까지 지켜본 뒤 차례로 종료한다. 끝난 코드.
 
-    종료: 종료 요청 파일 · 신호(Ctrl+C · 창 닫기 · SIGTERM). 프로세스 하나가 멈추면 나머지도 종료하고 1.
+    종료: 종료 요청 파일 · 신호(Ctrl+C · 창 닫기 · SIGTERM). API 서버가 멈추면 나머지도 종료하고 1.
+    작업 실행기가 멈추면 그 번호만 다시 띄운다.
     """
     record = RunRecord(
         pid=os.getpid(),
@@ -422,6 +463,7 @@ def run(
     output = ChildOutput(term)
     processes: dict[str, subprocess.Popen[str]] = {}
     models = ModelServers(device_texts=device_texts(choices, found))
+    pool = WorkerPool()
     code = 0
     try:
         _start_database(settings, term, record)
@@ -429,7 +471,16 @@ def run(
         _start_models(models, choices, env=env, output=output)
         for name, module in PROCESSES.items():
             processes[name] = _spawn(module, env=env, output=output, label=name)
-        body = _wait_until_ready(base_url, processes, models, settings=settings, term=term)
+        body = _wait_until_ready(
+            base_url,
+            processes,
+            models,
+            pool,
+            env=env,
+            output=output,
+            settings=settings,
+            term=term,
+        )
         if body is None:
             _fail(settings, record, "실행되지 않았습니다 · storage/logs를 확인하세요")
             return 1
@@ -439,7 +490,16 @@ def run(
         output.show_info = True
         if on_ready is not None:
             on_ready()
-        stopped = _watch(processes, models, settings=settings, term=term, output=output)
+        stopped = _watch(
+            processes,
+            models,
+            settings=settings,
+            term=term,
+            output=output,
+            pool=pool,
+            env=env,
+            base_url=base_url,
+        )
         if stopped is not None:
             term.fail(f"{stopped}가 멈췄습니다. 위의 안내를 확인하세요. 나머지도 종료합니다.")
             code = 1
@@ -451,7 +511,8 @@ def run(
         return 1
     finally:
         term.done("종료하는 중", "API 서버 · 작업 실행기 · 모델 서버 · DB", rail=False)
-        _stop(processes, term)
+        _stop(processes, term, pool=pool)
+        workers.remove_pool_state(settings)
         _stop_models(models, term)
         _stop_embedded_database(settings)
         term.end("DENT를 종료했습니다")
@@ -630,13 +691,17 @@ def _wait_until_ready(
     base_url: str,
     processes: dict[str, subprocess.Popen[str]],
     models: ModelServers,
+    pool: WorkerPool,
     *,
+    env: dict[str, str],
+    output: ChildOutput,
     settings: Settings,
     term: Terminal,
 ) -> dict[str, Any] | None:
-    """API가 준비되고 작업 실행기가 자리를 잡을 때까지 기다린다. 터미널이면 기다리는 동안 상황판을 보인다.
+    """API가 준비되면 작업 실행기를 정한 수만큼 띄우고, 모두 자리를 잡을 때까지 기다린다.
 
-    실행되지 못하면 None. 종료 요청이 오면 KeyboardInterrupt. 모델 준비는 기다리지 않는다.
+    터미널이면 기다리는 동안 상황판을 보인다. 실행되지 못하면 None. 종료 요청이 오면 KeyboardInterrupt.
+    모델 준비는 기다리지 않는다.
     """
     deadline = time.monotonic() + READY_TIMEOUT_S
     last_body: dict[str, Any] | None = None
@@ -644,7 +709,7 @@ def _wait_until_ready(
     flags = {"api": False, "worker": False}
 
     def render() -> RenderableType:
-        return startup_board(term, models, states, flags)
+        return startup_board(term, models, states, flags, pool=pool)
 
     live: AbstractContextManager[Any] = (
         Live(get_renderable=render, console=term.console, transient=True, refresh_per_second=8)
@@ -655,16 +720,21 @@ def _wait_until_ready(
         while time.monotonic() < deadline:
             if stop_requested(settings):
                 raise KeyboardInterrupt
-            for name, process in list(processes.items()):
+            for name, process in processes.items():
+                if process.poll() is not None:
+                    term.fail(f"실행되지 않았습니다. {name}가 멈췄습니다. 위의 안내를 확인하세요.")
+                    return None
+            for slot, process in list(pool.spawned.items()):
                 code = process.poll()
                 if code is None:
                     continue
-                # 작업 실행기가 0으로 끝났으면 다른 작업 실행기가 이미 떠 있는 것이다. 그것을 쓴다.
-                is_other_worker_running = name == WORKER and code == 0
-                if is_other_worker_running:
-                    del processes[name]
+                del pool.spawned[slot]
+                # 0으로 끝났으면 다른 작업 실행기가 그 번호를 이미 잡고 있다. 그것을 쓴다.
+                if code == 0:
+                    pool.taken.add(slot)
                     continue
-                term.fail(f"실행되지 않았습니다. {name}가 멈췄습니다. 위의 안내를 확인하세요.")
+                label = worker_label(slot)
+                term.fail(f"실행되지 않았습니다. {label} · 멈췄습니다. 위의 안내를 확인하세요.")
                 return None
             for role in models.spawned:
                 port = embedded_models.model_port(settings, role)
@@ -673,16 +743,22 @@ def _wait_until_ready(
                 response = client.get(f"{base_url}/readyz")
                 last_body = response.json()
                 flags["api"] = response.status_code == 200
-                flags["worker"] = last_body["info"]["worker"]["ok"] or WORKER not in processes
+                if flags["api"] and not pool.started:
+                    count = fetch_worker_count(client, base_url)
+                    sync_pool(pool, count=count, env=env, output=output, settings=settings)
+                    pool.started = True
+                if pool.started:
+                    flags["worker"] = _all_workers_ready(client, base_url, pool)
                 if flags["api"] and flags["worker"]:
                     for role, state in states.items():
                         models.reported[role] = report_key(state)
-                    return last_body
+                    # 실행기가 모두 자리를 잡은 뒤의 상태로 다시 읽는다(준비 줄에 보인다).
+                    return client.get(f"{base_url}/readyz").json()
             except (httpx.HTTPError, ValueError, KeyError, TypeError):
                 pass
             time.sleep(READY_POLL_INTERVAL_S)
 
-    # 작업 실행기만 늦으면 그대로 실행한다. 화면에 '종료됨'으로 보인다.
+    # 작업 실행기만 늦으면 그대로 실행한다. 화면에 '종료됨'이나 덜 뜬 수로 보인다.
     if last_body is not None and last_body.get("ready"):
         return last_body
     term.fail(f"{READY_TIMEOUT_S:.0f}초 안에 준비되지 않았습니다.")
@@ -692,13 +768,119 @@ def _wait_until_ready(
     return None
 
 
+def _all_workers_ready(client: httpx.Client, base_url: str, pool: WorkerPool) -> bool:
+    """정한 수의 번호가 모두 자리를 잡았는지(다른 실행기가 잡고 있던 번호는 그것으로 친다)."""
+    body = client.get(f"{base_url}/api/v1/workers").json()
+    running = {slot["slot"] for slot in body["slots"] if slot["state"] == SlotState.RUNNING}
+    return all(slot in running for slot in range(1, pool.count + 1))
+
+
+def worker_label(slot: int) -> str:
+    """작업 실행기 번호의 이름: '작업 실행기 2'."""
+    return f"{WORKER} {slot}"
+
+
+def fetch_worker_count(client: httpx.Client, base_url: str) -> int:
+    """화면에서 정한 실행기 수를 API로 읽는다."""
+    return int(client.get(f"{base_url}/api/v1/workers").json()["count"])
+
+
+def sync_pool(
+    pool: WorkerPool,
+    *,
+    count: int,
+    env: dict[str, str],
+    output: ChildOutput,
+    settings: Settings,
+    term: Terminal | None = None,
+) -> None:
+    """실행기를 정한 수에 맞춘다: 모자란 번호는 띄우고, 넘는 번호는 큰 것부터 종료하라고 알린다(하던 작업은 끝낸다).
+
+    너무 자주 멈춘 번호 · 다른 실행기가 잡고 있던 번호는 띄우지 않는다. 번호마다 상태를 파일에 적는다.
+    """
+    previous = pool.count
+    pool.count = count
+    for slot in range(1, count + 1):
+        is_blocked = slot in pool.taken or pool.states.get(slot) is SlotState.FAILED
+        if slot in pool.spawned or is_blocked:
+            continue
+        pool.spawned[slot] = _spawn_worker(slot, env=env, output=output)
+        pool.states[slot] = SlotState.STARTING
+    for slot in sorted(pool.spawned, reverse=True):
+        is_extra = slot > count and pool.states.get(slot) is not SlotState.DRAINING
+        if is_extra:
+            _ask_to_stop(pool.spawned[slot])
+            pool.states[slot] = SlotState.DRAINING
+    if term is not None and count != previous:
+        term.event(WORKER, f"수 {previous} → {count}")
+    workers.write_pool_state(settings, slots=pool.states)
+
+
+def reap_workers(
+    pool: WorkerPool,
+    *,
+    env: dict[str, str],
+    output: ChildOutput,
+    settings: Settings,
+    term: Terminal,
+) -> None:
+    """끝난 작업 실행기를 거둔다. 줄여서 끝난 번호는 둔다. 멈춘 번호는 한도 안에서 다시 띄운다."""
+    changed = False
+    for slot, process in list(pool.spawned.items()):
+        code = process.poll()
+        if code is None:
+            continue
+        del pool.spawned[slot]
+        changed = True
+        label = worker_label(slot)
+        was_draining = pool.states.get(slot) is SlotState.DRAINING
+        if was_draining or slot > pool.count:
+            pool.states[slot] = SlotState.STOPPED
+            term.event(label, "종료 · 하던 작업을 마침")
+            continue
+        if code == 0:
+            # 다른 실행기가 이 번호를 잡고 있다(손으로 띄운 실행기 등). 그것을 쓴다.
+            pool.taken.add(slot)
+            pool.states[slot] = SlotState.STOPPED
+            continue
+        now = time.monotonic()
+        recent = pool.crashes.setdefault(slot, deque())
+        recent.append(now)
+        while recent and now - recent[0] > RESTART_WINDOW_S:
+            recent.popleft()
+        log = f"storage/logs/worker-{slot}.log"
+        if len(recent) >= MAX_RESTARTS:
+            pool.states[slot] = SlotState.FAILED
+            minutes = round(RESTART_WINDOW_S / 60)
+            term.event(
+                label,
+                f"{minutes}분에 {MAX_RESTARTS}번 멈춰 다시 띄우지 않습니다 · {log}",
+                level="오류",
+            )
+            continue
+        term.event(label, f"멈췄습니다 · 다시 띄웁니다 · {log}", level="경고")
+        pool.spawned[slot] = _spawn_worker(slot, env=env, output=output)
+        pool.states[slot] = SlotState.RESTARTING
+    if changed:
+        workers.write_pool_state(settings, slots=pool.states)
+
+
+def _spawn_worker(slot: int, *, env: dict[str, str], output: ChildOutput) -> subprocess.Popen[str]:
+    """작업 실행기 하나를 번호를 주어 띄운다."""
+    return _spawn(
+        WORKER_MODULE, "--slot", str(slot), env=env, output=output, label=worker_label(slot)
+    )
+
+
 def startup_board(
     term: Terminal,
     models: ModelServers,
     states: dict[ConnectionRole, ServerState | None],
     flags: dict[str, bool],
+    *,
+    pool: WorkerPool | None = None,
 ) -> RenderableType:
-    """실행하는 동안의 상황판: 모델마다 진행, API 서버 · 작업 실행기는 도는 기호 → 준비됨."""
+    """실행하는 동안의 상황판: 모델마다 진행, API 서버 · 작업 실행기(정한 수)는 도는 기호 → 준비됨."""
     rail = term.symbols["rail"]
     lines = [Text.assemble((term.spinner(), ACCENT), "  실행하는 중")]
     for role in models.choices:
@@ -707,7 +889,8 @@ def startup_board(
         line.append_text(_pad(models.device_texts.get(role, ""), BOARD_DEVICE_WIDTH))
         line.append_text(state_text(term, states.get(role)))
         lines.append(line)
-    for key, name in (("api", "API 서버"), ("worker", "작업 실행기")):
+    worker_name = WORKER if pool is None else f"{WORKER} {pool.count}개"
+    for key, name in (("api", "API 서버"), ("worker", worker_name)):
         mark = Text("준비됨", style="green") if flags[key] else Text(term.spinner(), style=ACCENT)
         line = Text.assemble((rail, "dim"), "    ")
         line.append_text(_pad(name, BOARD_SERVER_WIDTH))
@@ -752,7 +935,7 @@ def print_ready(
     info = body.get("info", {})
     term.done("API 서버", f"{LOOPBACK_HOST}:{settings.port}", rail=False)
     worker_detail = str(info.get("worker", {}).get("detail", ""))
-    worker_value = worker_detail.removeprefix("실행 중 · ").replace("대기 작업", "대기")
+    worker_value = worker_detail.removeprefix("실행 중 ").replace("대기 작업", "대기")
     term.done("작업 실행기", worker_value, rail=False)
     waiting = False
     for role in (ConnectionRole.EMBEDDING, ConnectionRole.JEV, ConnectionRole.LLM):
@@ -782,30 +965,64 @@ def _watch(
     settings: Settings,
     term: Terminal,
     output: ChildOutput,
+    pool: WorkerPool | None = None,
+    env: dict[str, str] | None = None,
+    base_url: str | None = None,
 ) -> str | None:
-    """종료 요청이 오거나 프로세스 하나가 멈출 때까지 지켜본다. 멈춘 것의 이름, 종료 요청이면 None.
+    """종료 요청이 오거나 API 서버가 멈출 때까지 지켜본다. 멈춘 것의 이름, 종료 요청이면 None.
 
+    작업 실행기는 몇 초마다 정한 수에 맞춰 늘리거나 줄이고, 멈춘 번호는 다시 띄운다.
     모델 서버의 진행이 바뀌면 한 줄씩 알린다. 모델 서버가 멈추면 알리기만 하고 계속 지켜본다
     (모델 없이도 데이터를 보고 고칠 수 있다).
     """
     next_poll = 0.0
-    while True:
-        if stop_requested(settings):
-            return None
-        for name, process in processes.items():
-            if process.poll() is not None:
-                return name
-        for role, process in list(models.spawned.items()):
-            if process.poll() is not None:
-                log = f"storage/logs/{MODEL_LOG_FILES[role]}"
-                term.event(ROLE_LABELS[role], f"모델 서버가 멈췄습니다 · {log}", level="오류")
-                for line in output.recent.get(MODEL_LOG_LABELS[role], []):
-                    term.console.print(Text(f"          {line}", style="dim"))
-                del models.spawned[role]
-        if time.monotonic() >= next_poll:
-            report_models(models, settings=settings, term=term)
-            next_poll = time.monotonic() + MODEL_POLL_INTERVAL_S
-        time.sleep(WATCH_INTERVAL_S)
+    next_pool_poll = 0.0
+    with httpx.Client(timeout=PROBE_TIMEOUT_S) as client:
+        while True:
+            if stop_requested(settings):
+                return None
+            for name, process in processes.items():
+                if process.poll() is not None:
+                    return name
+            for role, process in list(models.spawned.items()):
+                if process.poll() is not None:
+                    log = f"storage/logs/{MODEL_LOG_FILES[role]}"
+                    term.event(ROLE_LABELS[role], f"모델 서버가 멈췄습니다 · {log}", level="오류")
+                    for line in output.recent.get(MODEL_LOG_LABELS[role], []):
+                        term.console.print(Text(f"          {line}", style="dim"))
+                    del models.spawned[role]
+            if pool is not None and env is not None:
+                reap_workers(pool, env=env, output=output, settings=settings, term=term)
+                if base_url is not None and time.monotonic() >= next_pool_poll:
+                    _follow_worker_count(
+                        client, base_url, pool, env=env, output=output, settings=settings, term=term
+                    )
+                    next_pool_poll = time.monotonic() + POOL_POLL_INTERVAL_S
+            if time.monotonic() >= next_poll:
+                report_models(models, settings=settings, term=term)
+                next_poll = time.monotonic() + MODEL_POLL_INTERVAL_S
+            time.sleep(WATCH_INTERVAL_S)
+
+
+def _follow_worker_count(
+    client: httpx.Client,
+    base_url: str,
+    pool: WorkerPool,
+    *,
+    env: dict[str, str],
+    output: ChildOutput,
+    settings: Settings,
+    term: Terminal,
+) -> None:
+    """화면에서 정한 실행기 수를 읽어 맞춘다. 읽지 못하면(API가 잠깐 바쁨) 다음에 다시 본다.
+
+    수가 같아도 맞춘다: 줄이는 중에 다시 늘리면, 줄이던 번호가 하던 작업을 끝내고 종료한 뒤 다시 띄워야 한다.
+    """
+    try:
+        count = fetch_worker_count(client, base_url)
+    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        return
+    sync_pool(pool, count=count, env=env, output=output, settings=settings, term=term)
 
 
 def report_models(models: ModelServers, *, settings: Settings, term: Terminal) -> None:
@@ -853,19 +1070,33 @@ def report_key(state: ServerState | None) -> tuple[ServerPhase | None, int]:
     return (state.phase, state.done_bytes * PERCENT // state.total_bytes // step)
 
 
-def _stop(processes: dict[str, subprocess.Popen[str]], term: Terminal) -> None:
-    """API 서버 · 작업 실행기에 종료하라고 한 번씩 알리고 기다린다. 제때 끝나지 않으면 강제로 종료한다."""
-    for process in processes.values():
+def _stop(
+    processes: dict[str, subprocess.Popen[str]], term: Terminal, *, pool: WorkerPool | None = None
+) -> None:
+    """API 서버 · 작업 실행기 모두에게 종료하라고 한꺼번에 알리고 함께 기다린다. 제때 끝나지 않으면 강제로 종료한다."""
+    named: list[tuple[str, subprocess.Popen[str], float]] = [
+        (name, process, STOP_TIMEOUT_S[name]) for name, process in processes.items()
+    ]
+    if pool is not None:
+        named += [
+            (worker_label(slot), process, STOP_TIMEOUT_S[WORKER])
+            for slot, process in sorted(pool.spawned.items())
+        ]
+    for _name, process, _timeout in named:
         _ask_to_stop(process)
-    for name, process in processes.items():
+    started = time.monotonic()
+    for name, process, timeout in named:
+        remaining = max(0.0, timeout - (time.monotonic() - started))
         try:
-            process.wait(timeout=STOP_TIMEOUT_S[name])
+            process.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
             term.warn(
-                f"{name}가 제때 끝나지 않아 강제로 종료했습니다. 하던 작업은 다음에 실행할 때 이어서 합니다"
+                f"{name} · 제때 끝나지 않아 강제로 종료했습니다. 하던 작업은 다음에 실행할 때 이어서 합니다"
             )
+    if pool is not None:
+        pool.spawned.clear()
 
 
 def model_of(role: ConnectionRole) -> EmbeddedModel:

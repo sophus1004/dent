@@ -6,7 +6,7 @@
 import { computed, onBeforeUnmount, ref, toValue, watch, type MaybeRefOrGetter } from 'vue'
 
 import { errorMessage, isAbortError } from '@/system/http'
-import { isJobFinished, useJob } from '@/system/jobs'
+import { isJobFinished, jobRemainingSeconds, useJob } from '@/system/jobs'
 
 import { cancelMap, getMap, startMap } from '@/modules/classification/api'
 import type { MapRead, MapStateRead } from '@/modules/classification/types'
@@ -26,9 +26,6 @@ export const PHASE_NAMES: Record<MapPhase, string> = {
 
 // 남은 시간을 어림하는 단계 (한 건씩 고르게 처리하는 단계)
 const TIMED_PHASES: MapPhase[] = ['embedding', 'judging']
-
-// 1초 = 1000밀리초
-const MS_PER_SECOND = 1000
 
 // 만드는 중인 지도의 진행
 export interface MapProgress {
@@ -71,7 +68,7 @@ export function useSemanticMap(datasetId: MaybeRefOrGetter<number>) {
     const done = current?.progress_done ?? 0
     const total = current?.progress_total ?? null
     const ratio = total ? Math.min(1, done / total) : null
-    return { phase, done, total, ratio, remainingSeconds: remaining(phase, done, total, result) }
+    return { phase, done, total, ratio, remainingSeconds: TIMED_PHASES.includes(phase) && current ? jobRemainingSeconds(current) : null }
   })
 
   // 작업이 끝나면(다 만듦 · 실패 · 취소) 상태를 다시 읽는다.
@@ -126,26 +123,7 @@ export function useSemanticMap(datasetId: MaybeRefOrGetter<number>) {
 // useSemanticMap이 돌려주는 것
 export type SemanticMap = ReturnType<typeof useSemanticMap>
 
-// 임베딩 · Jev 판정 단계의 남은 시간(초): 단계가 시작한 뒤 처리한 속도로 남은 양을 나눈다.
-function remaining(
-  phase: MapPhase,
-  done: number,
-  total: number | null,
-  result: Record<string, unknown> | null,
-): number | null {
-  const startedAt = typeof result?.phase_started_at === 'string' ? Date.parse(result.phase_started_at) : NaN
-  const canEstimate = TIMED_PHASES.includes(phase) && total !== null && done > 0 && !Number.isNaN(startedAt)
-  if (!canEstimate) return null
-  const elapsedSeconds = (Date.now() - startedAt) / MS_PER_SECOND
-  const perSecond = done / Math.max(elapsedSeconds, 1)
-  return Math.max(0, (total - done) / perSecond)
-}
-
-/** 남은 시간 글자. 60초 아래면 '1분 미만', 그 위는 '약 n분'. */
-export function remainingText(seconds: number): string {
-  const minutes = Math.round(seconds / 60)
-  return minutes < 1 ? '1분 미만' : `약 ${minutes}분`
-}
+export { remainingText } from '@/system/jobs'
 
 /** 모델 이름의 마지막 조각. 'BAAI/bge-m3' → 'bge-m3' */
 export function shortModelName(name: string | null): string {

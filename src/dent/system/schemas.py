@@ -15,6 +15,8 @@ from dent.system.connections import FactValue
 from dent.system.models import (
     API_KEY_MAX_LENGTH,
     DATASET_NAME_MAX_LENGTH,
+    MAX_WORKERS,
+    MIN_WORKERS,
     MODEL_NAME_MAX_LENGTH,
     ConnectionRole,
     ExportStatus,
@@ -337,6 +339,12 @@ class JobRead(BaseModel):
     # 사용자가 멈추라고 했는지
     cancel_requested: bool
 
+    # 이 작업을 꺼낸 작업 실행기 번호. 꺼내기 전이면 null
+    worker: int | None
+
+    # 대기 중인 까닭: dataset(같은 데이터셋의 앞 작업을 기다림) · worker(빈 작업 실행기를 기다림). 대기가 아니면 null
+    waiting: str | None = None
+
     # 일어난 일(시작 · 단계 · 다시 보내기 · 쓴 연결). 한 줄은 {"type", "at", ...}이고 시각 순이다.
     events: list[dict[str, Any]]
 
@@ -380,6 +388,55 @@ class JobPageRead(BaseModel):
 
     # 상태 거르기만 뺀 같은 조건의 상태별 수
     counts: JobCountsRead
+
+
+# ---------- 작업 실행기 ----------
+
+
+class WorkersUpdate(BaseModel):
+    """작업 실행기 수 바꾸기 입력."""
+
+    # 함께 돌 작업 실행기 수. 저장하면 관리 프로세스가 곧 늘리거나 줄인다.
+    count: int = Field(ge=MIN_WORKERS, le=MAX_WORKERS)
+
+
+class WorkerSlotRead(BaseModel):
+    """작업 실행기 번호 하나."""
+
+    # 번호 (1부터)
+    slot: int
+
+    # 상태: running · starting · draining(끝나면 종료) · restarting · failed · stopped
+    state: str
+
+    # 이 번호가 도는 작업. 없으면 null
+    job: JobRead | None
+
+
+class WorkersRead(BaseModel):
+    """작업 실행기 전체 모습."""
+
+    # 정한 실행기 수
+    count: int
+
+    # 고를 수 있는 범위
+    min_count: int
+    max_count: int
+
+    # 관리 프로세스가 지켜보는지. false면 수를 바꿔도 저장만 한다(실행기를 손으로 띄운 개발 실행).
+    managed: bool
+
+    # 자리를 잡고 실행 중인 실행기 수
+    running: int
+
+    # 도는 작업 수
+    busy: int
+
+    # 대기 작업 수
+    queued: int
+
+    # 번호마다
+    slots: list[WorkerSlotRead]
 
 
 # ---------- 외부 모델 연결 ----------

@@ -142,9 +142,15 @@ async def find_file(db: AsyncSession, *, export_id: int) -> tuple[Export, Path]:
 
 
 async def discard_expired_exports(db: AsyncSession) -> int:
-    """보관 기간이 지난 내보낸 파일을 지우고 지운 시각을 적는다. 지운 수를 돌려준다. 커밋은 부른 쪽이 한다."""
+    """보관 기간이 지난 내보낸 파일을 지우고 지운 시각을 적는다. 지운 수를 돌려준다. 커밋은 부른 쪽이 한다.
+
+    만드는 중이거나 기다리는 내보내기는 건너뛴다(다른 작업 실행기가 그 파일을 쓰는 중일 수 있다).
+    """
     cutoff = datetime.now(UTC) - EXPORT_RETENTION
-    query = select(Export).where(Export.deleted_at.is_(None), Export.created_at < cutoff)
+    is_finished = Export.status.in_((ExportStatus.DONE, ExportStatus.FAILED))
+    query = select(Export).where(
+        Export.deleted_at.is_(None), Export.created_at < cutoff, is_finished
+    )
     expired = list((await db.scalars(query)).all())
     now = datetime.now(UTC)
     for export in expired:

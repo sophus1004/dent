@@ -43,7 +43,7 @@ const generation: DentModule = {
   // 그 밖의 작업이 끝나면 데이터셋 화면(머리 · 진단)이 다시 읽게 알린다.
   onJobFinished: (job) => {
     if (job.kind === 'import') void loadDatasets()
-    notifyJobFinished()
+    notifyJobFinished(job)
   },
 }
 
